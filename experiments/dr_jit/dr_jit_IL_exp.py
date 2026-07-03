@@ -14,7 +14,7 @@ active = mi.Bool(True, True, True, True, True)
 throughput = mi.Float(1.0, 1.0, 1.0, 1.0, 1.0)
 accumulated_light = mi.Float(0.0, 0.0, 0.0, 0.0, 0.0)
 
-print("=== Simulating 3 bounces ===")
+print(" Simulating 3 bounces... ")
 
 # Simulate surface absorption at each bounce
 # Each surface absorbs some energy (like a dark or bright material)

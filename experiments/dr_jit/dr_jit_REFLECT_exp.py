@@ -5,7 +5,7 @@ import mitsuba as mi
 
 mi.set_variant("llvm_ad_rgb")
 
-# Two types of surfaces — diffuse and mirror
+# Two types of surfaces: diffuse and mirror
 # Each ray hits a different surface type
 is_mirror = mi.Bool(True, False, True, False, True)
 

@@ -11,7 +11,7 @@ mi.set_variant("llvm_ad_rgb")
 
 scene_dict = {
     "type": "scene",
-    # To be replaced: 'path' with 'my_path_tracer'
+    # To be replaced: 'path' with 'path_tracer'
     "integrator": {"type": "path", "max_depth": 8},
     **mi.cornell_box(),
 }
