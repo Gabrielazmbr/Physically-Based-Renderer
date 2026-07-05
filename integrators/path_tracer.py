@@ -27,24 +27,40 @@ class PathTracer(mi.SamplingIntegrator):
         si = dr.zeros(mi.SurfaceInteraction3f)
         bsdf_ctx = mi.BSDFContext()
 
+        prev_bsdf_pdf = mi.Float(1.0)
+        prev_delta = mi.Bool(False)
+
         while active:
             # Step 1: Intersect rays into the scene
             si = scene.ray_intersect(ray, active)
             active = active & si.is_valid()
 
-            # Adds emission from directly visible emitters (lights)
-            result += throughput * si.emitter(scene).eval(si, active)
-
-            # Step 2: Calculates direct illumination
+            # Step 2: Calculates direct illumination NEE
             ds, emitter_radiance = scene.sample_emitter_direction(
                 si, sampler.next_2d(), True, active
-            )
+            )  # ds.pdf : The emitter pdf when a BSDF ray hits a light
+
             bsdf = si.bsdf(ray)
             wo = si.to_local(ds.d)
             bsdf_val = bsdf.eval(bsdf_ctx, si, wo, active)
-            result += throughput * bsdf_val * emitter_radiance
 
-            # Step 3: Sample new direction for next bounce (Indirect Ilumination)
+            # MIS : For the NEE contribution, gets the BSDF pdf for that direction and applies the weight
+            bsdf_pdf = bsdf.pdf(bsdf_ctx, si, wo, active)
+
+            # MIS computation, handles delta light case (point light, directional light) - 1.0.
+            mis_em = dr.select(ds.delta, mi.Float(1), self.mis_weight(ds.pdf, bsdf_pdf))
+
+            # Adds emission from directly visible emitters (lights) and weighted byt MIS.
+            ds_prev = dr.zeros(mi.DirectionSample3f)
+            em_pdf = scene.pdf_emitter_direction(si, ds_prev, active)
+            mis_bsdf = dr.select(
+                prev_delta, mi.Float(1), self.mis_weight(prev_bsdf_pdf, em_pdf)
+            )
+            result += throughput * si.emitter(scene).eval(si, active) * mis_bsdf
+
+            result += throughput * bsdf_val * emitter_radiance * mis_em
+
+            # Step 3: Sample new direction for next bounce (Indirect Ilumination) BSDF Sampling
             bsdf_sample, bsdf_weight = bsdf.sample(
                 bsdf_ctx, si, sampler.next_1d(), sampler.next_2d(), active
             )
@@ -59,9 +75,22 @@ class PathTracer(mi.SamplingIntegrator):
             throughput[rr_active] *= dr.rcp(rr_prob)
             active = active & (~rr_active | rr_continue)
 
+            prev_bsdf_pdf = bsdf_sample.pdf
+            prev_delta = mi.Bool(
+                bsdf_sample.sampled_type & mi.UInt32(mi.BSDFFlags.Delta) != 0
+            )
+
             depth += 1
 
         return dr.select(si.is_valid(), result, mi.Color3f(0)), si.is_valid(), []
+
+    def mis_weight(self, pdf_a, pdf_b):
+        """
+        Balance heuristic function. Computes the MIS (Multiple Importance Sampling) weight for a given pair of pdfs.
+        """
+        pdf_a *= pdf_a
+        pdf_b *= pdf_b
+        return dr.select(pdf_a > 0, pdf_a / (pdf_a + pdf_b), mi.Float(0))
 
     def aov_names(self) -> list[str]:
         return []

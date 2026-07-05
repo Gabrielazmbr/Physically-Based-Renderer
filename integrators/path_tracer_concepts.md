@@ -202,6 +202,58 @@ estimate approaches the correct solution. Noise decreases at a rate of 1/√n:
 1024 spp → quarter noise   (16× samples)
 ```
 
+---
+
+# PDF — Probability Density Function
+When you randomly sample a direction, not all directions are equally likely to
+be chosen. The PDF tells you how likely a particular direction was to be sampled.
+
+If you're sampling directions towards a light source, directions pointing straight 
+at the light have a high probability of being chosen. The PDF value for that direction 
+is high. A direction pointing away from the light has a low probability — low PDF.
+
+Why does this matter? Because in Monte Carlo integration, if you preferentially sample
+certain directions more often, you need to divide by how often you sampled them to avoid
+over-counting their contribution. That division by PDF is what keeps the result unbiased.
+
+```
+ds.pdf — how likely NEE was to pick that direction to the light
+bsdf_sample.pdf — how likely the BSDF was to pick its bounce direction
+```
+
+---
+
+# Multiple Importance Sampling (MIS)
+MIS solves a sampling efficiency problem that arises when two valid strategies exist for 
+finding light at a surface. Next Event Estimation (NEE) samples ray directions by explicitly
+targeting the light source. BSDF sampling samples directions based on the probability 
+distribution of how the surface material scatters light. Both strategies are mathematically
+correct but each performs better in different situations. NEE works well for large diffuse
+lights, BSDF sampling works better for small bright lights on glossy surfaces.
+
+Rather than choosing one strategy over the other, MIS combines both simultaneously, weighting
+each contribution by how well-suited that strategy was to sample that particular direction. 
+A strategy that was highly likely to sample a given direction gets more weight; one that was
+unlikely gets less. Both still contribute to the final result, just in different proportions 
+depending on the situation.
+
+The power heuristic implements this weighting by squaring each strategy's PDF before dividing:
+
+```
+weight_a = pdf_a² / (pdf_a² + pdf_b²)
+```
+
+Squaring makes the weights more decisive. If one strategy is clearly better suited for a direction,
+it receives a proportionally larger share of the contribution. This reduces noise more effectively
+than the basic balance heuristic which uses unsquared PDFs.
+
+## The emitter hit problem
+Without MIS on emitter hits, a render can show firefly artefacts which are isolated very bright 
+pixels on glossy surfaces near small lights. This happens because NEE already accounts for the light
+contribution with correct weighting, but when a BSDF-sampled ray accidentally hits the same light 
+directly, that contribution gets added again without any weight. The fix tracks the previous bounce's
+BSDF pdf across loop iterations and uses it to weight the emitter hit contribution, eliminating the 
+double counting.
 
 ---
 
