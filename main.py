@@ -1,33 +1,48 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import sys
 
 import drjit as dr
 import mitsuba as mi
 
 mi.set_variant("llvm_ad_rgb")
 
-# Import and register integrator
+# Import and register plugins
+from bsdfs.principled import PrincipledBSDF
 from integrators.path_tracer import PathTracer
 
+# Register the Principled BSDF
+mi.register_bsdf("principled_bsdf", lambda props: PrincipledBSDF(props))
+# Register the Path Tracer integrator
 mi.register_integrator("path_tracer", lambda props: PathTracer(props))
 
-# Load Cornell Box but swap in PathTracer integrator
-scene_dict = mi.cornell_box()
-scene_dict["integrator"] = {"type": "path_tracer"}
 
+# Scene loading
+# from assets.scenes.white_furnace import white_furnace_scene
 
-def next_render_index(folder, prefix):
-    os.makedirs(folder, exist_ok=True)
-    existing = [f for f in os.listdir(folder) if f.startswith(prefix)]
-    return len(existing) + 1
+for roughness in [0.0, 0.5, 1.0]:
+    from assets.scenes.white_furnace import white_furnace_scene
+
+    scene_dict = white_furnace_scene(roughness=roughness)
+    scene = mi.load_dict(scene_dict)
+    img = mi.render(scene, spp=256)
+    mi.Bitmap(img).write(f"outputs/BSDF/white_furnace_r{roughness}.exr")
+    print(f"Rendered roughness {roughness}")
+
+"""
+scene_name = "white_furnace"
+test_name = "BSDF"
 
 
 scene = mi.load_dict(scene_dict)
-folder = "outputs/path_tracer"
-prefix = "cornell_box"
-index = next_render_index(folder, prefix)
 
-img = mi.render(scene, spp=512)
-mi.Bitmap(img).write(f"{folder}/{prefix}_{index:02d}.exr")
-print(f"Saved render {index:02d}")
+
+os.makedirs(f"outputs/{test_name}", exist_ok=True)
+existing = [f for f in os.listdir(f"outputs/{test_name}") if f.startswith(scene_name)]
+index = len(existing) + 1
+
+img = mi.render(scene, spp=256)
+mi.Bitmap(img).write(f"outputs/{test_name}/{scene_name}_{index:02d}.exr")
+print(f"Rendered outputs/{test_name}/{scene_name}_{index:02d}.exr")
+"""

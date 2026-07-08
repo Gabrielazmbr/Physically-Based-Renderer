@@ -39,13 +39,15 @@ def white_furnace_scene(roughness=0.5):
             "type": "constant",
             "radiance": {"type": "rgb", "value": [1.0, 1.0, 1.0]},
         },
-        # To be replaced: 'diffuse' with 'my_principled_bsdf'
+        # Using PrincipledBSDF
         "sphere": {
             "type": "sphere",
             "radius": 1.0,
             "bsdf": {
-                "type": "diffuse",
-                "reflectance": {"type": "rgb", "value": [1.0, 1.0, 1.0]},
+                "type": "PrincipledBSDF",
+                "base_colour": [1.0, 1.0, 1.0],
+                "roughness": 1.0,
+                "metallic": 0.0,
             },
         },
     }
