@@ -17,10 +17,17 @@ class PrincipledBSDF(mi.BSDF):
         self.roughness = props.get("roughness", 0.0)
         self.metallic = props.get("metallic", 0.0)
 
-        # Set BSDF flags: All types of scattering
-        # On the front face only
-        self.m_flags = mi.BSDFFlags.All | mi.BSDFFlags.FrontSide
-        self.m_components = [self.m_flags]
+        # Flags: Diffuse reflection, glossy reflection, front side only
+        self.m_flags = (
+            mi.BSDFFlags.DiffuseReflection
+            | mi.BSDFFlags.GlossyReflection
+            | mi.BSDFFlags.FrontSide
+        )
+        # Component flags: Diffuse reflection on front side, glossy reflection on front side
+        self.m_components = [
+            mi.BSDFFlags.DiffuseReflection | mi.BSDFFlags.FrontSide,
+            mi.BSDFFlags.GlossyReflection | mi.BSDFFlags.FrontSide,
+        ]
 
     def sample(self, ctx, si, sample1, sample2, active):
         # Sample a cosine-weighted direction on the hemisphere
@@ -37,12 +44,60 @@ class PrincipledBSDF(mi.BSDF):
 
         return bs, dr.select(active & (cos_theta_i > 0), value, mi.Color3f(0))
 
+    def fresnel_schlick(self, cos_theta):
+        # F0 blended by metallic parameter
+        f0_dielectric = mi.Color3f(0.04)
+        f0 = f0_dielectric * (1 - self.metallic) + self.base_colour * self.metallic
+        return f0 + (1 - f0) * dr.power(dr.maximum(1 - cos_theta, 0), 5)
+
     def eval(self, ctx, si, wo, active):
         cos_theta_i = mi.Frame3f.cos_theta(si.wi)
         cos_theta_o = mi.Frame3f.cos_theta(wo)
+        h = dr.normalize(si.wi + wo)
+        cos_theta_h = dr.dot(si.wi, h)
+
+        # Fresnel term
+        F = self.fresnel_schlick(cos_theta_h)
+
+        # Diffuse lobe
+        diffuse = (
+            self.base_colour * dr.inv_pi * cos_theta_o * (1 - F) * (1 - self.metallic)
+        )
+
+        # Specular lobe
+        specular = self.eval_specular(si, wo, active) * F
+
         return dr.select(
             active & (cos_theta_i > 0) & (cos_theta_o > 0),
-            self.base_colour * dr.inv_pi * cos_theta_o,
+            diffuse + specular,
+            mi.Color3f(0),
+        )
+
+    def eval_specular(self, si, wo, active):
+        # Halfway vector
+        h = dr.normalize(si.wi + wo)
+
+        cos_theta_i = mi.Frame3f.cos_theta(si.wi)
+        cos_theta_o = mi.Frame3f.cos_theta(wo)
+
+        # GGX microfacet distribution
+        alpha = dr.maximum(self.roughness * self.roughness, 1e-4)
+        distr = mi.MicrofacetDistribution(
+            mi.MicrofacetType.GGX, alpha, sample_visible=True
+        )
+
+        # D — microfacet distribution
+        D = distr.eval(h)
+
+        # G — shadowing masking term
+        G = distr.G(si.wi, wo, h)
+
+        # Specular value
+        specular = D * G / (4.0 * cos_theta_i)
+
+        return dr.select(
+            active & (cos_theta_i > 0) & (cos_theta_o > 0),
+            mi.Color3f(specular),
             mi.Color3f(0),
         )
 

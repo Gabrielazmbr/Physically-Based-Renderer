@@ -19,22 +19,12 @@ mi.register_integrator("path_tracer", lambda props: PathTracer(props))
 
 
 # Scene loading
-# from assets.scenes.white_furnace import white_furnace_scene
+from assets.scenes.white_furnace import white_furnace_scene
 
-for roughness in [0.0, 0.5, 1.0]:
-    from assets.scenes.white_furnace import white_furnace_scene
-
-    scene_dict = white_furnace_scene(roughness=roughness)
-    scene = mi.load_dict(scene_dict)
-    img = mi.render(scene, spp=256)
-    mi.Bitmap(img).write(f"outputs/BSDF/white_furnace_r{roughness}.exr")
-    print(f"Rendered roughness {roughness}")
-
-"""
 scene_name = "white_furnace"
 test_name = "BSDF"
 
-
+scene_dict = white_furnace_scene(roughness=1.0)
 scene = mi.load_dict(scene_dict)
 
 
@@ -45,4 +35,3 @@ index = len(existing) + 1
 img = mi.render(scene, spp=256)
 mi.Bitmap(img).write(f"outputs/{test_name}/{scene_name}_{index:02d}.exr")
 print(f"Rendered outputs/{test_name}/{scene_name}_{index:02d}.exr")
-"""
