@@ -68,6 +68,7 @@ The Schlick approximation for Fresnel is:
 ```
 F(cos_theta) = F0 + (1 - F0) * (1 - cos_theta)^5
 ```
+
 Where F0 is the reflectance at normal incidence (straight on). For dielectrics
 (plastic, wood, skin) F0 is around 0.04. For metals F0 is the base colour itself
 which is why metals look coloured in their reflections.

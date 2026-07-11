@@ -1,89 +1,80 @@
-"""
-Scene 03 Material Test Scene
-Validates: Principled BSDF parameter behaviour
-Expected outcome: three spheres showing distinct
-material responses.
-"""
-
 import mitsuba as mi
 
-mi.set_variant("llvm_ad_rgb")
 
-scene_dict = {
-    "type": "scene",
-    "integrator": {"type": "path", "max_depth": 8},
-    "sensor": {
-        "type": "perspective",
-        "fov": 45,
-        "to_world": mi.ScalarTransform4f().look_at(
-            origin=[0, 1.5, 10], target=[0, 0, 0], up=[0, 1, 0]
-        ),
-        "film_id": {
-            "type": "hdrfilm",
-            "width": 768,
-            "height": 384,
-            "pixel_format": "rgb",
-            "component_format": "float32",
-            "rfilter": {"type": "gaussian"},
+def material_test_scene():
+    """
+    Validates: Principled BSDF parameter behaviour
+    Expected: three spheres showing distinct material responses
+    """
+    return {
+        "type": "scene",
+        "integrator": {"type": "path_tracer", "max_depth": 8},
+        "sensor": {
+            "type": "perspective",
+            "fov": 45,
+            "to_world": mi.ScalarTransform4f().look_at(
+                origin=[0, 1.5, 10], target=[0, 0, 0], up=[0, 1, 0]
+            ),
+            "film": {
+                "type": "hdrfilm",
+                "width": 768,
+                "height": 384,
+                "pixel_format": "rgb",
+                "component_format": "float32",
+                "rfilter": {"type": "gaussian"},
+            },
+            "sampler": {"type": "independent", "sample_count": 128},
         },
-        "sampler_id": {"type": "independent", "sample_count": 128},
-    },
-    "light": {
-        "type": "constant",
-        "radiance": {"type": "rgb", "value": [1.0, 1.0, 1.0]},
-    },
-    # Metal sphere: high metallic, low roughness
-    # To be replaced: swap bsdf type for my_principled_bsdf
-    "sphere_metal": {
-        "type": "sphere",
-        "center": [-2.5, 0, 0],
-        "radius": 0.8,
-        "bsdf": {
-            "type": "conductor",
-            "material": "Au",  # gold
-            "alpha": 0.1,  # low roughness
+        "light": {
+            "type": "constant",
+            "radiance": {"type": "rgb", "value": [1.0, 1.0, 1.0]},
         },
-    },
-    # Plastic sphere: low metallic, low roughness
-    "sphere_plastic": {
-        "type": "sphere",
-        "center": [0, 0, 0],
-        "radius": 0.8,
-        "bsdf": {
-            "type": "plastic",
-            "diffuse_reflectance": {"type": "rgb", "value": [0.1, 0.27, 0.36]},
-            "int_ior": 1.9,
-        },
-    },
-    # Organic/diffuse sphere: low metallic, high roughness
-    "sphere_organic": {
-        "type": "sphere",
-        "center": [2.5, 0, 0],
-        "radius": 0.8,
-        "bsdf": {
-            "type": "diffuse",
-            "reflectance": {"type": "rgb", "value": [0.6, 0.3, 0.2]},
-        },
-    },
-    # Ground plane
-    "floor": {
-        "type": "rectangle",
-        "to_world": mi.ScalarTransform4f()
-        .scale([5, 5, 4])
-        .rotate([1, 0, 0], 90)
-        .translate([0, -0.8, 0.5]),
-        "bsdf": {
-            "type": "twosided",
+        "sphere_metal": {
+            "type": "sphere",
+            "center": [-2.5, 0, 0],
+            "radius": 0.8,
             "bsdf": {
-                "type": "diffuse",
-                "reflectance": {"type": "rgb", "value": [0.8, 0.8, 0.8]},
+                "type": "principled_bsdf",
+                "base_colour": [0.95, 0.77, 0.33],
+                "roughness": 0.1,
+                "metallic": 1.0,
             },
         },
-    },
+        "sphere_plastic": {
+            "type": "sphere",
+            "center": [0, 0, 0],
+            "radius": 0.8,
+            "bsdf": {
+                "type": "principled_bsdf",
+                "base_colour": [0.2, 0.3, 0.8],
+                "roughness": 0.3,
+                "metallic": 0.0,
+            },
+        },
+        "sphere_organic": {
+            "type": "sphere",
+            "center": [2.5, 0, 0],
+            "radius": 0.8,
+            "bsdf": {
+                "type": "principled_bsdf",
+                "base_colour": [0.6, 0.3, 0.2],
+                "roughness": 1.0,
+                "metallic": 0.0,
+            },
+        },
+        # Ground plane
+        "floor": {
+            "type": "rectangle",
+            "to_world": mi.ScalarTransform4f()
+            .scale([5, 5, 4])
+            .rotate([1, 0, 0], 90)
+            .translate([0, -0.8, 0.5]),
+            "bsdf": {
+                "type": "twosided",
+                "bsdf": {
+                    "type": "diffuse",
+                    "reflectance": {"type": "rgb", "value": [0.8, 0.8, 0.8]},
+                },
+            },
+        },
 }
-
-if __name__ == "__main__":
-    scene = mi.load_dict(scene_dict)
-    img = mi.render(scene, spp=128)
-    mi.Bitmap(img).write("outputs/03_material_test.exr")
-    print("Material test rendered — check outputs/03_material_test.exr")

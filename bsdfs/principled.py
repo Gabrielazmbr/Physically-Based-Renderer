@@ -29,20 +29,65 @@ class PrincipledBSDF(mi.BSDF):
             mi.BSDFFlags.GlossyReflection | mi.BSDFFlags.FrontSide,
         ]
 
-    def sample(self, ctx, si, sample1, sample2, active):
-        # Sample a cosine-weighted direction on the hemisphere
+    def _spec_prob(self):
+        # Metals should be specular
+        return mi.Float(dr.clamp(self.metallic * 0.8 + 0.1, 0.1, 0.9))
+
+    def sample(self, ctx, si, sample1, sample2, active=True):
         cos_theta_i = mi.Frame3f.cos_theta(si.wi)
+        active = active & (cos_theta_i > 0)
+
+        # Fresnel at normal incidence
+        spec_prob = self._spec_prob()
+
+        alpha = dr.maximum(self.roughness * self.roughness, 1e-4)
+        distr = mi.MicrofacetDistribution(mi.MicrofacetType.GGX, alpha, sample_visible=True)
 
         bs = mi.BSDFSample3f()
-        bs.wo = mi.warp.square_to_cosine_hemisphere(sample2)
-        bs.pdf = mi.warp.square_to_cosine_hemisphere_pdf(bs.wo)
+        sample_specular = sample1 < spec_prob
+
+        # ── Specular sampling ──
+        wi_hat = dr.mulsign(si.wi, cos_theta_i)
+        m, _ = distr.sample(wi_hat, sample2)
+        wo_spec = mi.reflect(si.wi, m)
+        valid_spec = (mi.Frame3f.cos_theta(wo_spec) > 0) & active
+
+        # Specular weight
+        cos_mi = dr.dot(si.wi, m)
+        F = self.fresnel_schlick(cos_mi)
+        G1 = distr.smith_g1(si.wi, m)
+        G2 = distr.G(si.wi, wo_spec, m)
+        weight_spec = dr.select(G1 > 0, F * G2 / G1, mi.Color3f(0))
+
+        # ── Diffuse sampling ──
+        wo_diff = mi.warp.square_to_cosine_hemisphere(sample2)
+        # cos terms cancel with pdf
+        cos_mi_diff = dr.dot(si.wi, dr.normalize(si.wi + wo_diff))
+        F_diff = self.fresnel_schlick(dr.maximum(cos_mi_diff, 0))
+        weight_diff = self.base_colour * (1 - F_diff) * (1 - self.metallic)
+
+        # ── Select lobe ──
+        use_spec = sample_specular & valid_spec
+        bs.wo = dr.select(use_spec, wo_spec, wo_diff)
         bs.eta = 1.0
-        bs.sampled_type = +mi.BSDFFlags.DiffuseReflection
         bs.sampled_component = mi.UInt32(0)
+        bs.sampled_type = dr.select(
+            use_spec,
+            mi.UInt32(+mi.BSDFFlags.GlossyReflection),
+            mi.UInt32(+mi.BSDFFlags.DiffuseReflection)
+        )
 
-        value = self.base_colour
+        # PDF for MIS
+        cos_theta_o = mi.Frame3f.cos_theta(bs.wo)
+        h = dr.normalize(si.wi + bs.wo)
+        cos_h = dr.maximum(dr.dot(wi_hat, h), 1e-7)
+        spec_pdf = dr.maximum(distr.pdf(wi_hat, h) / (4 * cos_h), 0)
+        diff_pdf = mi.warp.square_to_cosine_hemisphere_pdf(bs.wo)
+        bs.pdf = spec_prob * spec_pdf + (1 - spec_prob) * diff_pdf
 
-        return bs, dr.select(active & (cos_theta_i > 0), value, mi.Color3f(0))
+        weight = dr.select(use_spec, weight_spec, weight_diff)
+
+        return bs, dr.select(active & (cos_theta_o > 0), weight, mi.Color3f(0))
 
     def fresnel_schlick(self, cos_theta):
         # F0 blended by metallic parameter
@@ -50,13 +95,12 @@ class PrincipledBSDF(mi.BSDF):
         f0 = f0_dielectric * (1 - self.metallic) + self.base_colour * self.metallic
         return f0 + (1 - f0) * dr.power(dr.maximum(1 - cos_theta, 0), 5)
 
-    def eval(self, ctx, si, wo, active):
+    def eval(self, ctx, si, wo, active=True):
         cos_theta_i = mi.Frame3f.cos_theta(si.wi)
         cos_theta_o = mi.Frame3f.cos_theta(wo)
         h = dr.normalize(si.wi + wo)
         cos_theta_h = dr.dot(si.wi, h)
 
-        # Fresnel term
         F = self.fresnel_schlick(cos_theta_h)
 
         # Diffuse lobe
@@ -73,7 +117,7 @@ class PrincipledBSDF(mi.BSDF):
             mi.Color3f(0),
         )
 
-    def eval_specular(self, si, wo, active):
+    def eval_specular(self, si, wo, active=True):
         # Halfway vector
         h = dr.normalize(si.wi + wo)
 
@@ -93,7 +137,7 @@ class PrincipledBSDF(mi.BSDF):
         G = distr.G(si.wi, wo, h)
 
         # Specular value
-        specular = D * G / (4.0 * cos_theta_i)
+        specular = D * G / (4.0 * dr.maximum(cos_theta_i * cos_theta_o, 1e-7))
 
         return dr.select(
             active & (cos_theta_i > 0) & (cos_theta_o > 0),
@@ -101,15 +145,33 @@ class PrincipledBSDF(mi.BSDF):
             mi.Color3f(0),
         )
 
-    def pdf(self, ctx, si, wo, active):
+    def pdf(self, ctx, si, wo, active=True):
+        cos_theta_i = mi.Frame3f.cos_theta(si.wi)
         cos_theta_o = mi.Frame3f.cos_theta(wo)
-        return dr.select(
-            active & (cos_theta_o > 0),
-            mi.warp.square_to_cosine_hemisphere_pdf(wo),
-            mi.Float(0),
+
+        spec_prob = self._spec_prob()
+
+        alpha = dr.maximum(self.roughness * self.roughness, 1e-4)
+        distr = mi.MicrofacetDistribution(
+            mi.MicrofacetType.GGX, alpha, sample_visible=True
         )
 
-    def eval_pdf(self, ctx, si, wo, active):
+        h = dr.normalize(si.wi + wo)
+        cos_h = dr.maximum(dr.abs(dr.dot(si.wi, h)), 1e-7)
+
+        wi_hat = dr.mulsign(si.wi, cos_theta_i)
+        spec_pdf = dr.maximum(distr.pdf(wi_hat, h) / (4 * cos_h), 0)
+
+        diff_pdf = mi.warp.square_to_cosine_hemisphere_pdf(wo) * (1 - self.metallic)
+        pdf_val = spec_prob * spec_pdf + (1 - spec_prob) * diff_pdf
+
+        return dr.select(
+            active & (cos_theta_i > 0) & (cos_theta_o > 0),
+            pdf_val,
+            mi.Float(0)
+        )
+
+    def eval_pdf(self, ctx, si, wo, active=True):
         return self.eval(ctx, si, wo, active), self.pdf(ctx, si, wo, active)
 
     def traverse(self, callback):
@@ -119,5 +181,5 @@ class PrincipledBSDF(mi.BSDF):
         return f"PrincipledBSDF[base_colour={self.base_colour}, roughness={self.roughness}, metallic={self.metallic}]"
 
 
-mi.register_bsdf("PrincipledBSDF", lambda props: PrincipledBSDF(props))
+mi.register_bsdf("principled_bsdf", lambda props: PrincipledBSDF(props))
 print("Principled BSDF registered")
