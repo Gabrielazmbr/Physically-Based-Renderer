@@ -30,8 +30,8 @@ class PrincipledBSDF(mi.BSDF):
         ]
 
     def _spec_prob(self):
-        # Metals should be specular
-        return mi.Float(dr.clamp(self.metallic * 0.8 + 0.1, 0.1, 0.9))
+        return dr.select(self.metallic > 0.99, mi.Float(1.0),
+            mi.Float(dr.clamp(self.metallic * 0.8 + 0.1, 0.1, 0.9)))
 
     def sample(self, ctx, si, sample1, sample2, active=True):
         cos_theta_i = mi.Frame3f.cos_theta(si.wi)
@@ -48,7 +48,7 @@ class PrincipledBSDF(mi.BSDF):
 
         # ── Specular sampling ──
         wi_hat = dr.mulsign(si.wi, cos_theta_i)
-        m, _ = distr.sample(wi_hat, sample2)
+        m, m_pdf = distr.sample(wi_hat, sample2)
         wo_spec = mi.reflect(si.wi, m)
         valid_spec = (mi.Frame3f.cos_theta(wo_spec) > 0) & active
 
@@ -80,12 +80,19 @@ class PrincipledBSDF(mi.BSDF):
         # PDF for MIS
         cos_theta_o = mi.Frame3f.cos_theta(bs.wo)
         h = dr.normalize(si.wi + bs.wo)
-        cos_h = dr.maximum(dr.dot(wi_hat, h), 1e-7)
-        spec_pdf = dr.maximum(distr.pdf(wi_hat, h) / (4 * cos_h), 0)
+        cos_theta_i_val = dr.maximum(cos_theta_i, 1e-7)
+        spec_pdf = dr.maximum(
+            distr.eval(m) * distr.smith_g1(wi_hat, m) / (4 * cos_theta_i_val), 0
+        )
         diff_pdf = mi.warp.square_to_cosine_hemisphere_pdf(bs.wo)
-        bs.pdf = spec_prob * spec_pdf + (1 - spec_prob) * diff_pdf
+        bs.pdf = dr.select(
+            use_spec,
+            spec_prob * spec_pdf + (1 - spec_prob) * diff_pdf,
+            (1 - spec_prob) * diff_pdf  # failed specular: only diffuse PDF
+        )
 
-        weight = dr.select(use_spec, weight_spec, weight_diff)
+        weight = dr.select(use_spec, weight_spec,
+                 dr.select(~sample_specular, weight_diff, mi.Color3f(0)))
 
         return bs, dr.select(active & (cos_theta_o > 0), weight, mi.Color3f(0))
 
@@ -156,11 +163,13 @@ class PrincipledBSDF(mi.BSDF):
             mi.MicrofacetType.GGX, alpha, sample_visible=True
         )
 
-        h = dr.normalize(si.wi + wo)
-        cos_h = dr.maximum(dr.abs(dr.dot(si.wi, h)), 1e-7)
-
         wi_hat = dr.mulsign(si.wi, cos_theta_i)
-        spec_pdf = dr.maximum(distr.pdf(wi_hat, h) / (4 * cos_h), 0)
+        h = dr.normalize(si.wi + wo)
+        cos_h = dr.maximum(dr.dot(wi_hat, h), 1e-7)
+        cos_theta_i_val = dr.maximum(cos_theta_i, 1e-7)
+        spec_pdf = dr.maximum(
+            distr.eval(h) * distr.smith_g1(wi_hat, h) / (4 * cos_theta_i_val), 0
+        )
 
         diff_pdf = mi.warp.square_to_cosine_hemisphere_pdf(wo) * (1 - self.metallic)
         pdf_val = spec_prob * spec_pdf + (1 - spec_prob) * diff_pdf

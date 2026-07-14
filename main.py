@@ -18,12 +18,21 @@ from assets.scenes.white_furnace import white_furnace_scene
 from assets.scenes.cornell_box import cornell_box_scene
 
 
-scene_dict = cornell_box_scene()
-scene_name = "cornell_box"
+scene_dict = white_furnace_scene()
+scene_name = "white_furnace_roug"
 test_name = "BSDF"
 spp = 256
 
 # ───────────────────────────────────────────────────────────────
+
+
+for roughness in [0.0, 0.5, 1.0]:
+    scene_dict = white_furnace_scene(roughness=roughness)
+    scene = mi.load_dict(scene_dict)
+    img = mi.render(scene, spp=256)
+    img_np = np.array(mi.Bitmap(img))
+    print(f"Roughness {roughness}: Mean={img_np.mean():.4f} Std={img_np.std():.4f}")
+
 
 
 def save_render(img, scene_name, test_name):
@@ -37,7 +46,7 @@ def save_render(img, scene_name, test_name):
     print(f"Saved: {path}")
     return path
 
-
+'''
 scene = mi.load_dict(scene_dict)
 img = mi.render(scene, spp=spp)
 save_render(img, scene_name, test_name)
@@ -49,3 +58,4 @@ print(f"Min: {img_np.min():.4f}")
 print(f"Max: {img_np.max():.4f}")
 print(f"Mean: {img_np.mean():.4f}")
 print(f"Std: {img_np.std():.4f}")
+'''

@@ -3,6 +3,30 @@
 A reference document covering the core concepts behind the custom path tracing
 integrator implemented in this project.
 
+
+# SPP (Samples Per Pixel) + max_depth (bounces) + rr_depth (Russian Roulette)
+
+For a 1920 × 1080 image:
+
+Resolution: about 2.07 million pixels
+SPP = 64
+Max depth = 8
+
+Approximately:
+
+2.07 million pixels
+× 64 camera paths per pixel
+= 132 million paths
+
+Each of those paths can bounce up to 8 times.
+
+So the renderer may perform up to roughly:
+
+132 million paths × 8 bounces
+≈ 1.06 billion ray-surface interactions
+
+In practice, many paths terminate earlier due to misses or Russian roulette, so the actual number is usually lower.
+
 ---
 
 # How the Path Tracer Works
@@ -186,6 +210,12 @@ it and the image would be almost entirely noise.
 ---
 
 # Monte Carlo Integration
+
+Rendering equation:
+
+```
+Lo = Le + ∫ fr * Li cosθdω
+```
 
 Monte Carlo integration is the mathematical foundation of path tracing. The
 rendering equation which describes how light distributes in a scene is an
