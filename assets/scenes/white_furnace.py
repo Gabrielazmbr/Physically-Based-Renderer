@@ -1,14 +1,13 @@
 import mitsuba as mi
 
-
-def white_furnace_scene(roughness=0.5):
+def white_furnace_scene(bsdf, integrator_type="path_tracer", spp=256, max_depth=16):
     """
-    Validates: BSDF energy conservation
-    Expected: sphere completely invisible against white background
+    Validates: energy conservation for a given BSDF + integrator pair.
+    Expected: sphere completely invisible against white background (mean -> 1.0).
     """
     return {
         "type": "scene",
-        "integrator": {"type": "path", "max_depth": 16},
+        "integrator": {"type": integrator_type, "max_depth": max_depth},
         "sensor": {
             "type": "perspective",
             "fov": 45,
@@ -23,7 +22,7 @@ def white_furnace_scene(roughness=0.5):
                 "component_format": "float32",
                 "rfilter": {"type": "gaussian"},
             },
-            "sampler": {"type": "independent", "sample_count": 256},
+            "sampler": {"type": "independent", "sample_count": spp},
         },
         "emitter": {
             "type": "constant",
@@ -32,11 +31,6 @@ def white_furnace_scene(roughness=0.5):
         "sphere": {
             "type": "sphere",
             "radius": 1.0,
-            "bsdf": {
-                "type": "principled_bsdf",
-                "base_colour": [1.0, 1.0, 1.0],
-                "roughness": roughness,
-                "metallic": 0.0,
-            },
+            "bsdf": bsdf,
         },
     }

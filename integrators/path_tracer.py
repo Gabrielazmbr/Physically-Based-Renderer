@@ -24,6 +24,15 @@ class PathTracer(mi.SamplingIntegrator):
     ) -> tuple[mi.Color3f, mi.Bool, list]:
         # RGB values / Validator for rays that hit a surface (contributes) / AOVs
 
+
+        '''
+        Performs Monte Carlo path tracing for a camera ray and returns its
+        radiance contribution. The function evaluates light transport through
+        multiple surface interactions using BSDF sampling, Next Event Estimation
+        (NEE), Multiple Importance Sampling (MIS), and Russian Roulette path
+        termination.
+        '''
+
         # Initialization
         ray = mi.Ray3f(ray) # Standard mitsuba ray
         throughput = mi.Color3f(1.0) # Rays energy starts at 100%
