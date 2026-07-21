@@ -1,7 +1,7 @@
 import mitsuba as mi
 
 
-def environment_lighting_scene(hdri_path="assets/hdri/studio_kontrast_04_1k.exr"):
+def environment_lighting_scene(hdri_path="assets/hdri/sundowner_overlook_1k.exr"):
     """
     Validates: IBL importance sampling vs uniform sampling
     Expected: importance sampled version shows less noise at same sample count
@@ -23,7 +23,7 @@ def environment_lighting_scene(hdri_path="assets/hdri/studio_kontrast_04_1k.exr"
                 "component_format": "float32",
                 "rfilter": {"type": "gaussian"},
             },
-            "sampler": {"type": "independent", "sample_count": 64},
+            "sampler": {"type": "independent", "sample_count": 256},
         },
         "emitter": {"type": "envmap", "filename": hdri_path},
         "sphere": {
