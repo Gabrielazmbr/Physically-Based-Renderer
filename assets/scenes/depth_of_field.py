@@ -10,7 +10,7 @@ def depth_of_field_scene():
         "type": "scene",
         "integrator": {"type": "path_tracer", "max_depth": 8},
         "sensor": {
-            "type": "thinlens",
+            "type": "thinlens_probe",
             "fov": 60,
             "aperture_radius": 0.5,
             "focus_distance": 12.0,
