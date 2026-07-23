@@ -22,8 +22,13 @@ class ThinLensCamera(mi.ProjectiveCamera):
         return True
 
     def sample_ray(self, time, sample1, sample2, sample3, active=True):
-        x = (2.0 * sample2.x - 1.0) * self.tan_fov * self.aspect
-        y = -(2.0 * sample2.y - 1.0) * self.tan_fov
+        # Matching Mitsuba Camera
+        #x = (2.0 * sample2.x - 1.0) * self.tan_fov * self.aspect
+        #y = -(2.0 * sample2.y - 1.0) * self.tan_fov
+
+        # Matching Blender Export
+        x = (2.0 * sample2.x - 1.0) * self.tan_fov
+        y = -(2.0 * sample2.y - 1.0) * self.tan_fov / self.aspect
         d_cam = dr.normalize(mi.Vector3f(x, y, 1.0))
 
 

@@ -1,10 +1,10 @@
 import drjit as dr
 import mitsuba as mi
 
-'''
+"""
 This class creates a new integrator (algorithm that computes incoming radiance).
 It implements a Monte Carlo Path Tracer.
-'''
+"""
 
 class PathTracer(mi.SamplingIntegrator):
     def __init__(self, props): #props ships max_depth and rr_depth values
@@ -25,14 +25,13 @@ class PathTracer(mi.SamplingIntegrator):
         # RGB values / Validator for rays that hit a surface (contributes) / AOVs
 
 
-        '''
+        """
         Performs Monte Carlo path tracing for a camera ray and returns its
         radiance contribution. The function evaluates light transport through
         multiple surface interactions using BSDF sampling, Next Event Estimation
         (NEE), Multiple Importance Sampling (MIS), and Russian Roulette path
         termination.
-        '''
-
+        """
         # Initialization
         ray = mi.Ray3f(ray) # Standard mitsuba ray
         throughput = mi.Color3f(1.0) # Rays energy starts at 100%
@@ -140,10 +139,10 @@ class PathTracer(mi.SamplingIntegrator):
 
 
     def mis_weight(self, pdf_a, pdf_b):
-        '''
+        """
         Implements power heuristic:
         w = pdf_a² / (pdf_a² + pdf_b²)
-        '''
+        """
         pdf_a *= pdf_a
         pdf_b *= pdf_b
         return dr.select(pdf_a > 0, pdf_a / (pdf_a + pdf_b), mi.Float(0))

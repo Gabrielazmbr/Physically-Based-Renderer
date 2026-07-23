@@ -4,11 +4,14 @@ import numpy as np
 import drjit as dr
 import mitsuba as mi
 
-
+"""
+This class implements an infinite environment emitter that maps a HDR image onto a sphere
+surrounding the scene. Performs luminance-based importance sampling to preferentially
+sample brighter regions of the environment.
+"""
 class CustomEnvmap(mi.Emitter):
     def __init__(self, props):
         mi.Emitter.__init__(self, props)
-
         self.texture = mi.load_dict({
             "type": "bitmap",
             "filename": props["filename"],
@@ -21,6 +24,9 @@ class CustomEnvmap(mi.Emitter):
 
         self.m_flags = mi.EmitterFlags.Infinite
         self.bsphere_radius = 1.0
+
+        self.to_world = self.world_transform()
+        self.to_world_inv = self.to_world.inverse()
 
         # Build the luminance CDF for importance sampling
         self.res_x, self.res_y = 256, 128
@@ -43,9 +49,10 @@ class CustomEnvmap(mi.Emitter):
         self.bsphere_radius = dr.norm(bbox.max - bbox.min) * 0.5
 
     def _dir_to_uv(self, d):
-        u = dr.atan2(d.x, -d.z) * (1.0 / (2.0 * math.pi))
-        u = u - dr.floor(u)  # wrap into [0,1) — atan2 can be negative
-        cos_v = dr.clamp(d.y, -1.0, 1.0)
+        d_local = dr.normalize(mi.Vector3f(self.to_world_inv @ mi.Vector3f(d)))
+        u = dr.atan2(d_local.x, -d_local.z) * (1.0 / (2.0 * math.pi))
+        u = u - dr.floor(u)
+        cos_v = dr.clamp(d_local.y, -1.0, 1.0)
         v = dr.acos(cos_v) * (1.0 / math.pi)
         return mi.Point2f(u, v)
 
@@ -53,7 +60,8 @@ class CustomEnvmap(mi.Emitter):
         theta = v * math.pi
         phi = u * 2.0 * math.pi
         sin_theta, cos_theta = dr.sin(theta), dr.cos(theta)
-        return mi.Vector3f(sin_theta * dr.sin(phi), cos_theta, -sin_theta * dr.cos(phi))
+        d_local = mi.Vector3f(sin_theta * dr.sin(phi), cos_theta, -sin_theta * dr.cos(phi))
+        return dr.normalize(mi.Vector3f(self.to_world @ d_local))
 
     def _radiance(self, d, active):
         si_tex = dr.zeros(mi.SurfaceInteraction3f)
@@ -114,7 +122,3 @@ class CustomEnvmap(mi.Emitter):
 
     def to_string(self):
         return f"CustomEnvmap[importance={self.importance}, radius={self.bsphere_radius}]"
-
-
-mi.register_emitter("custom_envmap", lambda props: CustomEnvmap(props))
-print("Custom envmap registered")
