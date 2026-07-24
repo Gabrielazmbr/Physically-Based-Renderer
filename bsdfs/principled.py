@@ -6,16 +6,27 @@ class PrincipledBSDF(mi.BSDF):
     def __init__(self, props):
         mi.BSDF.__init__(self, props)
 
+        # Base Colour
         self.base_colour = props.get("base_colour", mi.Color3f(1.0)) # Gets base colour from scene, if not falls back to white
         if not isinstance(self.base_colour, mi.Texture):
             self.base_colour = mi.Color3f(self.base_colour) # Mitsuba's parser instantiates intp mi.Texture object
 
+        # Roughness
         self.roughness = props.get("roughness", 0.0) # Gets roughness, if not falls to smooth 0.0
         if not isinstance(self.roughness, mi.Texture):
             self.roughness = mi.Float(self.roughness) # Mitsuba's parser instantiates intp mi.Texture object
+
+        # Metallic
         self.metallic = props.get("metallic", 0.0) # Gets metallic, if not falls to dielectric 0.0
         if not isinstance(self.metallic, mi.Texture):
             self.metallic = mi.Float(self.metallic) # Mitsuba's parser instantiates intp mi.Texture object
+
+        # Specular
+        self.specular = props.get("specular", 0.5) # Gets specular, default 0.5 matches Disney/Blender convention
+        if not isinstance(self.specular, mi.Texture):
+            self.specular = mi.Float(self.specular) # Mitsuba's parser instantiates intp mi.Texture object
+
+
 
         # Flags: Bitmask describing what the BSDF is able to do.
         self.m_flags = (
@@ -56,13 +67,35 @@ class PrincipledBSDF(mi.BSDF):
             return self.metallic.eval_1(si, active)
         return self.metallic
 
-    def _spec_prob(self, metallic):
+    def _specular_at(self, si, active=True):
         """
-        Computes the probability (0.1 - 1.0) of sampling specular lobe vs diffuse lobe based on metallic.
-        Avoids 0 that completely ignores specular GGX lobe. Allows 1 for 100% specular.
+        Outputs specular value at the current surface point,
+        regardless of whether the specular value is a constant value or a texture
         """
-        return dr.select(self.metallic > 0.99, mi.Float(1.0),
-            mi.Float(dr.clamp(self.metallic * 0.8 + 0.1, 0.1, 0.9)))
+        if isinstance(self.specular, mi.Texture):
+            return self.specular.eval_1(si, active)
+        return self.specular
+
+    def eval_diffuse_reflectance(self, si, active=True):
+        """
+        Overrides the generic base-class default (which folds in Fresnel and
+        view-angle dependence) to return the traditional flat albedo AOV:
+        material base color only, no lighting or view dependence. Albedo pass.
+        """
+        return self._base_colour_at(si, active)
+
+    def _spec_prob(self, metallic, specular):
+        """
+        Computes the probability (0.0 - 1.0) of sampling specular lobe vs diffuse lobe based on metallic.
+        Floors at 0.1 to avoid a nonzero specular lobe being invisible to the
+        sampler except when there is truly no specular reflectance at all
+        (specular=0 and metallic=0), in which case this returns exactly 0,
+        matching a full Lambertian.
+        """
+        base_prob = dr.select(metallic > 0.99, mi.Float(1.0),
+            mi.Float(dr.clamp(metallic * 0.8 + 0.1, 0.1, 0.9)))
+        has_specular = (specular > 0) | (metallic > 0)
+        return dr.select(has_specular, base_prob, mi.Float(0.0))
 
     def sample(self, ctx, si, sample1, sample2, active=True): # BSDF Context, Surface interaction data, random numbers, ray mask
         """
@@ -76,7 +109,8 @@ class PrincipledBSDF(mi.BSDF):
 
         roughness = self._roughness_at(si, active) # Calls _roughness_at for roughness value
         metallic = self._metallic_at(si, active) # Calls _metallic_at for metallic value
-        spec_prob = self._spec_prob(metallic) # Calls _spec_prob for computing probability
+        specular = self._specular_at(si, active) # Calls _specular_at for specular value
+        spec_prob = self._spec_prob(metallic, specular) # Calls _spec_prob for computing probability
 
         alpha = dr.maximum(roughness * roughness, 1e-4) # Squaring roughness for better control, also avoids 0
         distr = mi.MicrofacetDistribution(mi.MicrofacetType.GGX, alpha, sample_visible=True)
@@ -130,15 +164,15 @@ class PrincipledBSDF(mi.BSDF):
         # Sampling result (BSDFSample3f) + sample weight (energy transported) checks ray being active and valid direction
 
 
-    def fresnel_schlick(self, cos_theta, base_colour, metallic):
+    def fresnel_schlick(self, cos_theta, base_colour, metallic, specular):
         """
         Applies Fresnel Schlick approximation equation.
             F=F0​+(1−F0​)(1−cosθ)5
         """
         # F0 blended by metallic parameter
-        f0_dielectric = mi.Color3f(0.04) # Reflectance at normal incidence given
+        f0_dielectric = mi.Color3f(0.08 * specular) # Reflectance at normal incidence; 0.08 * specular is the Disney/Blender convention.
         f0 = f0_dielectric * (1 - metallic) + base_colour * metallic
-        # Case 1: Dialectric = Metallic 0, uses 0.04 reflectance
+        # Case 1: Dialectric = Metallic 0, uses 0.08 * specular reflectance
         # Case 2: Metals = Metallic 1, uses base_colour
         return f0 + (1 - f0) * dr.power(dr.maximum(1 - cos_theta, 0), 5) # Schlick's approximation result
 
@@ -157,18 +191,22 @@ class PrincipledBSDF(mi.BSDF):
         base_colour = self._base_colour_at(si, active)
         roughness = self._roughness_at(si, active)
         metallic = self._metallic_at(si, active)
+        specular = self._specular_at(si, active)
+        has_specular = (specular > 0) | (metallic > 0) # zero-specular case: specular=0 and metallic=0 = no Fresnel, no specular lobe
 
-        F = self.fresnel_schlick(cos_theta_h, base_colour, metallic) # specular: Fresnel at the half-vector
-        F_diffuse_gate = self.fresnel_schlick(cos_theta_i, base_colour, metallic) # diffuse: gate by what actually reflected at the surface, not the half-vector
+        F = dr.select(has_specular, self.fresnel_schlick(cos_theta_h, base_colour, metallic, specular), mi.Color3f(0)) # specular: Fresnel at the half-vector
+        F_diffuse_gate = dr.select(has_specular, self.fresnel_schlick(cos_theta_i, base_colour, metallic, specular), mi.Color3f(0))
+        # diffuse: gate by what actually reflected at the surface, not the half-vector
 
         diffuse = (
             base_colour * dr.inv_pi * cos_theta_o * (1 - F_diffuse_gate) * (1 - metallic)
         )
-        specular = self.eval_specular(si, wo, roughness, active) * F
+        specular_term = dr.select(has_specular, self.eval_specular(si, wo, roughness, active) * F, mi.Color3f(0))
+        # renamed from `specular` to avoid clashing with the specular *parameter* above
 
         return dr.select(
             active & (cos_theta_i > 0) & (cos_theta_o > 0),
-            diffuse + specular,
+            diffuse + specular_term,
             mi.Color3f(0),
         ) # Checks alive rays and above the surface as valid, returns complete BRDF
 
@@ -210,7 +248,8 @@ class PrincipledBSDF(mi.BSDF):
 
         roughness = self._roughness_at(si, active)
         metallic = self._metallic_at(si, active)
-        spec_prob = self._spec_prob(metallic)
+        specular = self._specular_at(si, active)
+        spec_prob = self._spec_prob(metallic, specular)
 
         alpha = dr.maximum(roughness * roughness, 1e-4) # Squaring roughness for better control, also avoids 0
         distr = mi.MicrofacetDistribution(
@@ -245,7 +284,7 @@ class PrincipledBSDF(mi.BSDF):
         pass
 
     def to_string(self):
-        return f"PrincipledBSDF[base_colour={self.base_colour}, roughness={self.roughness}, metallic={self.metallic}]"
+        return f"PrincipledBSDF[base_colour={self.base_colour}, roughness={self.roughness}, metallic={self.metallic}, specular={self.specular}]"
 
 
 mi.register_bsdf("principled_bsdf", lambda props: PrincipledBSDF(props)) # Register PrincipledBSDF class (creates instance)

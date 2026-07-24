@@ -11,6 +11,7 @@ class PathTracer(mi.SamplingIntegrator):
         super().__init__(props)
         self.max_depth = props.get("max_depth", 8) # The maximum number of bounces allowed for a ray.
         self.rr_depth = props.get("rr_depth", 3) # Russian Roulette starts after bounce 3.
+        self.with_aovs = props.get("with_aovs", False) # Handles AOVs if asked
 
     @dr.syntax
     # Decorator for handling Python loops (while statement) into vectorized kernels.
@@ -52,6 +53,12 @@ class PathTracer(mi.SamplingIntegrator):
         # Types of transport: radiance transport (light to camera), importance transport (camera to light - the one used)
         # Types of scattering: reflection, transmission
 
+        # AOV accumulators, captured once from the primary ray's first hit only,
+        # Default to 0, which is also the correct value on a miss.
+        aov_albedo = mi.Color3f(0.0)
+        aov_normal = mi.Vector3f(0.0)
+        aov_depth = mi.Float(0.0)
+
         while active:
             # Step 1: Intersect
             si = scene.ray_intersect(ray, active) # Test for an intersection and return detailed information
@@ -85,6 +92,15 @@ class PathTracer(mi.SamplingIntegrator):
 
             # Step 3: NEE: sample emitter direction
             bsdf = si.bsdf(ray) # Finds material attached to the surface
+
+            # AOV capture : depth == 0 is true for every lane on the loop's
+            # first pass, whether that ray hit or missed. Missed rays simply
+            # keep the 0.0 default from initialization.
+            first_hit = active & (depth == 0)
+            aov_albedo = dr.select(first_hit, bsdf.eval_diffuse_reflectance(si, first_hit), aov_albedo)
+            aov_normal = dr.select(first_hit, si.sh_frame.n, aov_normal)
+            aov_depth = dr.select(first_hit, si.t, aov_depth)
+
             active_em = active & (depth < self.max_depth) # Masks rays that are still alive
 
             ds, emitter_radiance = scene.sample_emitter_direction(
@@ -127,15 +143,19 @@ class PathTracer(mi.SamplingIntegrator):
             prev_si = mi.Interaction3f(si) # Current itration becomes prev
             prev_bsdf_pdf = bsdf_sample.pdf # PDF of the sampled BSDF direction
             prev_delta = mi.Bool(
-                bsdf_sample.sampled_type & mi.UInt32(mi.BSDFFlags.Delta) != 0
-            ) # Stores Delta event if that is the case
+            bsdf_sample.sampled_type & mi.UInt32(mi.BSDFFlags.Delta) != 0) # Stores Delta event if that is the case
 
             depth += 1 # Bounce count
 
-        return (dr.select(valid_ray, result, mi.Color3f(0)), valid_ray, [])
+        aovs = [aov_albedo.x, aov_albedo.y, aov_albedo.z, aov_normal.x, aov_normal.y, aov_normal.z, aov_depth] if self.with_aovs else []
+        return (
+            dr.select(valid_ray, result, mi.Color3f(0)),
+            valid_ray,
+            aovs,
+        )
         # Final color, if valid ray = result (color), Invalid Ray = black
         # valid_ray = if path contributed or not
-        # AOVS [] (empty)
+        # # AOVs: albedo (R,G,B), shading normal (X,Y,Z), depth (primary-ray hit distance)
 
 
     def mis_weight(self, pdf_a, pdf_b):
@@ -148,10 +168,13 @@ class PathTracer(mi.SamplingIntegrator):
         return dr.select(pdf_a > 0, pdf_a / (pdf_a + pdf_b), mi.Float(0))
 
     def aov_names(self):
-        return []
+        if not self.with_aovs:
+            return []
+        return ["albedo.R", "albedo.G", "albedo.B", "normal.X", "normal.Y", "normal.Z", "depth.Y"]
 
     def to_string(self):
         return f"PathTracer[max_depth={self.max_depth}, rr_depth={self.rr_depth}]"
 
 
 mi.register_integrator("path_tracer", lambda props: PathTracer(props)) # Register PathTracer class
+print("Path Tracer registered")

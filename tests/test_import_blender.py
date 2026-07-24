@@ -24,7 +24,7 @@ own_scene = mi.load_dict({
     "type": "scene",
     "integrator": {"type": "path_tracer", "max_depth": 12},
     "sensor": {
-        "type": "thinlens",
+        "type": "physical_camera",
         "fov": 39.597752,
         "aperture_radius": 0.0,
         "focus_distance": 1.0,

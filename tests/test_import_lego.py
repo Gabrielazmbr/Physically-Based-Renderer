@@ -38,17 +38,19 @@ for bsdf_el in root.findall("bsdf"):
     else:
         print(f"Unhandled material type '{mat_type}' ({mat_id}), skipping")
         continue
-    """
+
     materials[mat_id] = {
         "type": "twosided",
         "bsdf": {"type": "principled_bsdf", "base_colour": color,
-                 "roughness": DEFAULT_ROUGHNESS, "metallic": 0.0},
+                "roughness": DEFAULT_ROUGHNESS, "metallic": 0.0,
+                "specular": 0.0},
     }
     """
     materials[mat_id] = {
         "type": "twosided",
         "bsdf": {"type": "diffuse", "reflectance": {"type": "rgb", "value": color}},
     }
+    """
 print(f"Parsed {len(materials)} materials: {list(materials.keys())}")
 
 shapes = {}
@@ -70,7 +72,7 @@ scene_dict = {
     "type": "scene",
     "integrator": {"type": "path_tracer", "max_depth": 8},
     "sensor": {
-        "type": "thinlens",
+        "type": "physical_camera",
         "fov": 39.000001,
         "aperture_radius": 0.0,
         "focus_distance": 1.0,
@@ -91,5 +93,5 @@ scene_dict = {
 
 own_scene = mi.load_dict(scene_dict)
 img = mi.render(own_scene, spp=1024)
-mi.util.write_bitmap("outputs/BlenderValidation/lego_test_mitsubadiffuse_01.exr", img)
-print("Wrote outputs/BlenderValidation/lego_test_mitsubadiffuse_01.exr")
+mi.util.write_bitmap("outputs/BlenderValidation/lego_test_custom_04.exr", img)
+print("Wrote outputs/BlenderValidation/lego_test_custom_04.exr")

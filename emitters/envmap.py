@@ -29,13 +29,21 @@ class CustomEnvmap(mi.Emitter):
         self.to_world_inv = self.to_world.inverse()
 
         # Build the luminance CDF for importance sampling
-        self.res_x, self.res_y = 256, 128
+        self.res_x = int(props.get("cdf_res_x", 512))
+        self.res_y = int(props.get("cdf_res_y", 256))
+        self.cdf_pooling = props.get("cdf_pooling", "max")
+        # "mean" or "max" (default — validated in Section 10b, ~18% noise reduction combined with higher resolution)
+
         bitmap = mi.Bitmap(props["filename"])
         img = np.array(bitmap, dtype=np.float32)
         H, W = img.shape[0], img.shape[1]
         by, bx = H // self.res_y, W // self.res_x
-        small = img[:by*self.res_y, :bx*self.res_x].reshape(
-            self.res_y, by, self.res_x, bx, -1).mean(axis=(1, 3))
+        blocks = img[:by*self.res_y, :bx*self.res_x].reshape(
+            self.res_y, by, self.res_x, bx, -1)
+        if self.cdf_pooling == "max":
+            small = blocks.max(axis=(1, 3))
+        else:
+            small = blocks.mean(axis=(1, 3))
 
         luminance = 0.2126*small[..., 0] + 0.7152*small[..., 1] + 0.0722*small[..., 2]
         theta = (np.arange(self.res_y) + 0.5) / self.res_y * math.pi
@@ -122,3 +130,6 @@ class CustomEnvmap(mi.Emitter):
 
     def to_string(self):
         return f"CustomEnvmap[importance={self.importance}, radius={self.bsphere_radius}]"
+
+mi.register_emitter("custom_envmap", lambda props: CustomEnvmap(props))
+print("Custom Environment Map registered")

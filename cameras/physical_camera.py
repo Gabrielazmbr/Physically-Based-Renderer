@@ -3,7 +3,7 @@ import drjit as dr
 import os
 import numpy as np
 
-class ThinLensCamera(mi.ProjectiveCamera):
+class PhysicalCamera(mi.ProjectiveCamera):
     def __init__(self, props):
         mi.Sensor.__init__(self, props)
         self.aperture_radius = props.get("aperture_radius", 0.0)
@@ -27,7 +27,7 @@ class ThinLensCamera(mi.ProjectiveCamera):
         #y = -(2.0 * sample2.y - 1.0) * self.tan_fov
 
         # Matching Blender Export
-        x = (2.0 * sample2.x - 1.0) * self.tan_fov
+        x = -(2.0 * sample2.x - 1.0) * self.tan_fov
         y = -(2.0 * sample2.y - 1.0) * self.tan_fov / self.aspect
         d_cam = dr.normalize(mi.Vector3f(x, y, 1.0))
 
@@ -57,3 +57,6 @@ class ThinLensCamera(mi.ProjectiveCamera):
         ray_diff = mi.RayDifferential3f(ray)
         ray_diff.has_differentials = False
         return ray_diff, weight
+
+mi.register_sensor("physical_camera", lambda props: PhysicalCamera(props))
+print("Physical Camera Registered")

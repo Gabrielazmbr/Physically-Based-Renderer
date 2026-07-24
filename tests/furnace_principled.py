@@ -21,6 +21,22 @@ def principled(roughness, metallic):
         "metallic": metallic,
     }
 
+def principled_zero_specular(roughness):
+    """
+    specular=0.0, metallic=0.0 — zero-specular Lambertian
+    Expected:
+    mean: 1.0 at every roughness, since there's no Fresnel attenuation left
+    at all (unlike the metallic=0.0/specular=0.5 case above, which
+    still carries a small F0=0.04 term).
+    """
+    return {
+        "type": "principled_bsdf",
+        "base_colour": [1.0, 1.0, 1.0],
+        "roughness": roughness,
+        "metallic": 0.0,
+        "specular": 0.0,
+    }
+
 roughness_values = [0.0, 0.5, 1.0]
 spp = 256
 
@@ -31,8 +47,16 @@ for metallic, seed in [(0.0, 11), (1.0, 7)]:
     for r in roughness_values:
         scene = mi.load_dict(white_furnace_scene(principled(r, metallic), integrator_type="path_tracer", spp=spp))
         img = mi.render(scene, spp=spp, seed=seed)
-        arr = np.array(img)
+        arr = np.array(img)[..., :3]
         print(f"{r:>9.1f} {spp:>6} {seed:>6} {arr.mean():>8.4f} {arr.std():>8.4f}")
+
+print(f"\nZero-specular (specular=0.0, metallic=0.0)")
+print(f"{'Roughness':>9} {'SPP':>6} {'Seed':>6} {'Mean':>8} {'Std':>8}")
+for r in roughness_values:
+    scene = mi.load_dict(white_furnace_scene(principled_zero_specular(r), integrator_type="path_tracer", spp=spp))
+    img = mi.render(scene, spp=spp, seed=17)
+    arr = np.array(img)[..., :3]
+    print(f"{r:>9.1f} {spp:>6} {17:>6} {arr.mean():>8.4f} {arr.std():>8.4f}")
 
 
 """
@@ -44,5 +68,5 @@ print("SPP Increase: ")
 for spp, seed in [(256, 11), (1024, 11), (1024, 22), (4096, 11)]:
     scene = mi.load_dict(white_furnace_scene(bsdf, integrator_type="path_tracer", spp=spp))
     img = mi.render(scene, spp=spp, seed=seed)
-    arr = np.array(img)
+    arr = np.array(img)[..., :3]
     print(f"spp={spp:>5} seed={seed:>3}  mean={arr.mean():.4f}  std={arr.std():.4f}")

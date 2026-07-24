@@ -25,7 +25,7 @@ def environment_lighting_scene(hdri_path="assets/hdri/sundowner_overlook_1k.exr"
             },
             "sampler": {"type": "independent", "sample_count": 256},
         },
-        "emitter": {"type": "envmap", "filename": hdri_path},
+        "emitter": {"type": "custom_envmap", "filename": hdri_path},
         "sphere": {
             "type": "sphere",
             "radius": 1.0,

@@ -6,10 +6,10 @@ mi.set_variant("llvm_ad_rgb")
 
 from integrators.path_tracer import PathTracer
 from bsdfs.principled import PrincipledBSDF
-from cameras.thin_lens_camera import ThinLensCamera
+from cameras.physical_camera import PhysicalCamera
 from emitters.envmap import CustomEnvmap
 
 mi.register_integrator("path_tracer", lambda props: PathTracer(props))
 mi.register_bsdf("principled_bsdf", lambda props: PrincipledBSDF(props))
-mi.register_sensor("thinlens_probe", lambda props: ThinLensCamera(props))
+mi.register_sensor("physical_camera", lambda props: PhysicalCamera(props))
 mi.register_emitter("custom_envmap", lambda props: CustomEnvmap(props))

@@ -1,8 +1,7 @@
 #!/usr/bin/env -S uv run --script
 """
-tests/diag_albedo2.py
 Directional albedo, importance-sampled via the BSDF's own sample()
-(valid at any roughness, unlike uniform hemisphere sampling).
+(valid at any roughness)
 
   albedo_sample = E[ weight returned by sample() ]
   albedo_eval   = E[ eval(wo) / pdf(wo) ],  wo ~ sample()

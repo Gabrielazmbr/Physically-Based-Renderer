@@ -25,5 +25,5 @@ print(f"{'Roughness':>9} {'Integrator':<12} {'SPP':>6} {'Seed':>6} {'Mean':>8} {
 for roughness, alpha, integrator_type, seed in configs:
     scene = mi.load_dict(white_furnace_scene(roughconductor(alpha), integrator_type=integrator_type, spp=256))
     img = mi.render(scene, spp=256, seed=seed)
-    arr = np.array(img)
+    arr = np.array(img)[..., :3]
     print(f"{roughness:>9.1f} {integrator_type:<12} {256:>6} {seed:>6} {arr.mean():>8.4f} {arr.std():>8.4f}")

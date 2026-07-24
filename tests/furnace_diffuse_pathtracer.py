@@ -24,5 +24,5 @@ print(f"{'Integrator':<12} {'SPP':>6} {'Seed':>6} {'Mean':>8} {'Std':>8}")
 for integrator_type, spp, seed in configs:
     scene = mi.load_dict(white_furnace_scene(diffuse_bsdf, integrator_type=integrator_type, spp=spp))
     img = mi.render(scene, spp=spp, seed=seed)
-    arr = np.array(img)
+    arr = np.array(img)[..., :3]
     print(f"{integrator_type:<12} {spp:>6} {seed:>6} {arr.mean():>8.4f} {arr.std():>8.4f}")

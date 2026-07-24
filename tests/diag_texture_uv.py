@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 """
-tests/diag_texture_uv.py
 Confirms PrincipledBSDF's texture-parameter helpers (_base_colour_at,
 _roughness_at, _metallic_at) actually read si.uv and vary spatially,
 rather than silently returning one constant everywhere.

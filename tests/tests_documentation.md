@@ -147,7 +147,7 @@ metallic/roughness combination.
    RenderMan.
 
 
-------- Part #2 --------
+------- Part #2 -------- IBL and Thin Lens Camera Build / DCC Scenes
 
 # Importance Sampling
 
@@ -249,9 +249,50 @@ HDRIs. Underscores the importance of exact, per-sample geometric masks
 (rather than brightness- or single-ray-based proxies) when isolating regions
 for noise analysis.
 
----
 
-# 8. DCC Scene Import Validation — Blender Pipeline
+# 8. Physical Camera Validation
+
+Tests whether the custom thin-lens camera (`PhysicalCamera`) is
+geometrically correct: matching Mitsuba's built-in `perspective` sensor
+exactly at zero aperture, and behaving as a genuine thin-lens model
+when aperture is nonzero.
+
+
+### 8a. Pinhole-equivalence
+At `aperture_radius=0`, `PhysicalCamera` should exactly match Mitsuba's
+`perspective` sensor at the same fov and `to_world`.
+
+| Stage | Mean abs diff | Result |
+|-------|---------------|--------|
+| Initial (mirror bug present, see 8c) | 0.01766 | Superseded |
+| After mirror fix, 1024 spp | 0.00065 | PASS — consistent with Monte Carlo noise floor |
+
+### 8b. Horizontal-axis mirror (found and fixed)
+The initial diff, while plausible-looking, masked a real defect:
+`PhysicalCamera` mirrored the image horizontally relative to
+`perspective` — same `to_world`, same world-space object position,
+opposite screen side. Confirmed directly (a single off-center test
+object, compared screen-side placement against the reference) rather
+than inferred from the aggregate diff alone. Root cause: sign of the
+x-axis term in `sample_ray()`:
+
+``` python
+x = -(2.0 * sample2.x - 1.0) * self.tan_fov
+```
+
+The vertical axis was already correct and needed no change.
+
+### 8d. Depth-of-field
+Three spheres at increasing distance, `aperture_radius=0.15`,
+`focus_distance` matching the mid sphere.
+
+**Result: PASS.** Mid sphere renders sharp; near and far spheres render
+visibly blurred, with blur increasing with distance from the focal
+plane — correct thin-lens behavior.
+
+----
+
+# 9. DCC Scene Import Validation — Blender Pipeline
 
 Tests whether a scene authored in a real DCC tool (Blender) can be
 converted into a scene dict using this project's own plugins
@@ -267,7 +308,7 @@ exported XML's `<rotate>`/`<translate>` tags — this avoids needing to
 know Mitsuba's rotation-composition convention, since the matrix is
 already fully resolved by Mitsuba's own parser.
 
-### 8a. Proof of concept — single cube
+### 9a. Proof of concept — single cube
 
 A default Blender cube, exported and reconstructed through the custom
 pipeline, matched a Mitsuba-native reference render of the same
@@ -278,7 +319,7 @@ the reverse). This was invisible in prior square-format test scenes,
 since at aspect ratio 1.0 the two formulations are numerically
 identical — only a non-square DCC camera exposes the difference.
 
-### 8b. Full scene — Lego 856 Bulldozer (Blendswap, CC-BY-NC, Heinzelnisse)
+### 9b. Full scene — Lego 856 Bulldozer (Blendswap, CC-BY-NC, Heinzelnisse)
 
 A ~439-shape, 9-material scene with an HDRI environment light —
 substantially more complex than any hand-built validation scene,
@@ -303,7 +344,7 @@ matrix" technique used for the camera was applied here.
 correct geometry, correct HDRI orientation, correct per-material
 colors, correct camera framing.
 
-### 8c. Finding — `principled_bsdf` cannot represent a true Lambertian material
+### 9c. Finding — `principled_bsdf` could not represent a true Lambertian material
 
 The custom render showed visibly more specular reflection across every
 brick than the Cycles reference. Isolated via a controlled swap: with
@@ -317,13 +358,139 @@ minimum probability of sampling the specular lobe, regardless of
 input parameters), and the dielectric Fresnel term defaults to
 `F0=0.04`. Together these mean `principled_bsdf` cannot represent a
 true zero-specular Lambertian surface — only a "very rough,
-low-Fresnel" approximation of one.
+low-Fresnel" approximation of one. This was corrected to be able to
+display a full Lambertian material.
 
-**Scope note for thesis:** this is a genuine, documented limitation,
-not a bug — the model was designed around Disney's principled
-parameterization, which assumes some baseline specular response is
-always physically present. Materials that are genuinely
-specular-free (chalk, unfinished matte cardboard) are not exactly
-representable; glossy/plastic-like materials (the actual Lego bricks
-being approximated here) arguably suit this model better than a pure
-Lambertian would have anyway.
+
+
+------- Part #3 -------- Improvements to BSDF, IBL, Camera and Path tracer
+
+
+
+# Zero-Specular Case
+
+### Zero-specular mode (specular=0.0, metallic=0.0)
+
+| Roughness | Mean   | Std    | Result |
+|-----------|--------|--------|--------|
+| 0.0       | 1.0000 | 0.0067 | PASS — exact |
+| 0.5       | 1.0000 | 0.0067 | PASS — exact |
+| 1.0       | 1.0000 | 0.0067 | PASS — exact |
+
+**Interpretation:** identical mean and std across every roughness value
+(same seed) — expected and correct, since a true zero-specular material
+has no roughness dependence at all once the specular lobe is fully
+gated off. Slightly closer to 1.0 than the specular=0.5 default case at
+roughness=0.0 (1.0000 vs 1.0001), consistent with there being no
+residual Fresnel term (F0=0.04) left to attenuate the diffuse lobe.
+
+
+
+# AOVs
+
+## AOV (Arbitrary Output Variable) Support
+
+Adds optional auxiliary output channels to the custom path tracer —
+albedo, shading normal, and depth — alongside the main radiance result.
+Useful for compositing, debugging material/geometry issues
+independently of lighting, and as future input to post-process
+denoising (see Known Limitations / roadmap).
+
+### Design
+Opt-in via a `with_aovs` flag on `path_tracer` (default `False`), so
+every existing scene and test is completely unaffected unless AOVs are
+explicitly requested. When enabled, `aov_names()` reports:
+
+| Name | Channels | Source |
+|------|----------|--------|
+| `albedo` | R, G, B | `bsdf.eval_diffuse_reflectance()` |
+| `normal` | X, Y, Z | Shading normal, world space, raw (not remapped for display) |
+| `depth` | Y | Primary-ray hit distance |
+
+All three are captured once, from the primary ray's first intersection
+only — not accumulated across bounces — matching the conventional
+meaning of an AOV pass (what's directly visible to camera). On a
+missed ray, all three default to 0.
+
+**Albedo note:** `principled_bsdf` overrides the generic
+`eval_diffuse_reflectance()` base-class default to return the flat
+material base color, with no Fresnel or view-angle dependence. The
+generic base-class default (used automatically by any BSDF that
+doesn't override it, including Mitsuba's own built-ins) folds in
+Fresnel and does vary with view angle — a different, and for this
+purpose less useful, quantity. This override matches the standard
+VFX/compositing convention for an albedo pass (a flat, delighted
+material-color swatch), rather than the generic default's shaded value.
+
+### Validation
+Rendered a simple two-material scene (sphere + floor, distinct base
+colors and roughness values) with `with_aovs=True` and inspected each
+pass independently:
+
+- **Albedo:** flat, uniform color per object, no lighting falloff or
+  highlight — confirms the override is taking effect and the pass
+  reflects material color only, independent of the lit beauty render.
+- **Normal:** smooth per-pixel variation across the curved sphere;
+  the flat floor plane's known geometric orientation matches its
+  expected constant remapped color exactly, confirming world-space
+  orientation is captured correctly.
+- **Depth:** continuous gradient across visible geometry, consistent
+  with relative camera distance.
+
+**Result: PASS.** Regression suite (`run_all.sh`) re-confirmed
+unaffected with the default `with_aovs=False`.
+
+
+
+## 10. Noise Reduction Experiments
+
+Two independent noise-reduction techniques, each measured using the
+Week 6 methodology: 24 independently-seeded renders at fixed spp,
+per-pixel standard deviation across the repeats (reference-free
+variance measurement), on `sundowner_overlook_1k.exr` — the HDRI with
+the highest energy concentration from Week 6, and therefore the case
+most likely to expose a sampling-quality difference.
+
+### 10a. Stratified vs. independent sampler
+Sampler type is the only variable; scene, HDRI, and the validated
+importance-sampled `CustomEnvmap` held fixed. 16 spp (a perfect square,
+required for stratified sampling's grid subdivision).
+
+| Sampler | Mean per-pixel std | Reduction |
+|---|---|---|
+| independent (prior default) | 0.10892 | — |
+| stratified | 0.08766 | 19.5% |
+
+**Interpretation:** stratified sampling guarantees one sample per grid
+cell rather than relying on pure chance to avoid clustering — a
+theoretical guarantee that Monte Carlo variance can only decrease,
+never increase, for a fixed sample count. No code changes were
+required; this is a scene-configuration change reusing Mitsuba's
+built-in `stratified` sampler plugin. Adopted as the new default.
+
+### 10b. CDF resolution and pooling method
+`CustomEnvmap`'s luminance CDF build was parameterized (`cdf_res_x`,
+`cdf_res_y`, `cdf_pooling`), isolating resolution and block-pooling
+method as independent, combinable variables. Sampler held fixed at
+`independent` for this comparison, so only the CDF configuration
+changes.
+
+| Configuration | Mean per-pixel std | Reduction |
+|---|---|---|
+| Baseline (256x128, mean-pooled) | 0.10892 | — |
+| Same resolution, max-pooled | 0.10475 | 3.8% |
+| Higher resolution (512x256), mean-pooled | 0.10035 | 7.9% |
+| Higher resolution (512x256), max-pooled | 0.08966 | 17.7% |
+
+**Interpretation:** both changes individually reduce noise, and they
+combine rather than compete — resolution determines how finely a
+bright, spatially concentrated feature (e.g. a small sun disc) can be
+resolved at all; pooling method determines how much of that feature's
+peak brightness survives being averaged into a coarse cell. Since each
+addresses a different point in the CDF-construction pipeline, their
+effects are close to additive. Max-pooling is the more defensible
+choice generally: mean-pooling can systematically underestimate a
+small bright feature's true importance within a block, which is
+precisely the scenario stratified/importance sampling exists to guard
+against. Adopted as new defaults: `cdf_res_x=512, cdf_res_y=256,
+cdf_pooling="max"`.

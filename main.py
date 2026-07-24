@@ -9,12 +9,12 @@ mi.set_variant("llvm_ad_rgb")
 from bsdfs.principled import PrincipledBSDF
 from integrators.path_tracer import PathTracer
 from emitters.envmap import CustomEnvmap
-from cameras.thin_lens_camera import ThinLensCamera
+from cameras.physical_camera import PhysicalCamera
 
 mi.register_integrator("path_tracer", lambda props: PathTracer(props))
 mi.register_bsdf("principled_bsdf", lambda props: PrincipledBSDF(props))
-mi.register_bsdf("custom_envmap", lambda props: CustomEnvmap(props))
-mi.register_sensor("thinlens_probe", lambda props: ThinLensCamera(props))
+mi.register_emitter("custom_envmap", lambda props: CustomEnvmap(props))
+mi.register_sensor("physical_camera", lambda props: PhysicalCamera(props))
 
 # ── Load scene ────────────────────────────────────────────────
 from assets.scenes.material_test import material_test_scene
@@ -26,7 +26,7 @@ from assets.scenes.depth_of_field import depth_of_field_scene
 # ───────────────────────────────────────────────────────────────
 
 scene_dict = depth_of_field_scene()
-scene_dict["sensor"]["type"] = "thinlens_probe"
+scene_dict["sensor"]["type"] = "physical_camera"
 scene = mi.load_dict(scene_dict)
 sensor = scene.sensors()[0]
 
