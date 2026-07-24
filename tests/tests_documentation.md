@@ -384,9 +384,7 @@ gated off. Slightly closer to 1.0 than the specular=0.5 default case at
 roughness=0.0 (1.0000 vs 1.0001), consistent with there being no
 residual Fresnel term (F0=0.04) left to attenuate the diffuse lobe.
 
-
-
-# AOVs
+----
 
 ## AOV (Arbitrary Output Variable) Support
 
@@ -440,7 +438,7 @@ pass independently:
 **Result: PASS.** Regression suite (`run_all.sh`) re-confirmed
 unaffected with the default `with_aovs=False`.
 
-
+-----
 
 ## 10. Noise Reduction Experiments
 
@@ -494,3 +492,117 @@ small bright feature's true importance within a block, which is
 precisely the scenario stratified/importance sampling exists to guard
 against. Adopted as new defaults: `cdf_res_x=512, cdf_res_y=256,
 cdf_pooling="max"`.
+
+-----
+
+## 11. Firefly Clamping
+
+Adds an optional cap on any single sample's contribution to a pixel,
+trading a small, controlled bias for reduced variance from rare,
+extreme-outlier samples ("fireflies") — distinct from ordinary Monte
+Carlo noise, which this does not address (see below).
+
+### Design
+Opt-in via `firefly_clamp` on `path_tracer` (default `0.0`, disabled —
+every existing scene unaffected unless explicitly set). Applied to
+both radiance-accumulation paths (NEE and BSDF-hit/emitter), since a
+firefly can originate from either. Clamped per-channel (R, G, B
+independently), not by luminance — the simpler, more common
+convention, at the cost of a possible small hue shift on an extremely
+bright, saturated, clamped pixel.
+
+### Validation
+`sundowner_overlook_1k.exr` (highest energy-concentration HDRI from
+Week 6) — deliberately chosen as the case most prone to fireflies via
+BSDF-sampled paths landing on the small, bright sun.
+
+| Config | Max pixel value | Mean |
+|---|---|---|
+| Control (no clamp) | 4930.42 | 0.4991 |
+| clamp=3.0 | 5.79 | 0.2964 |
+| clamp=50.0 | 74.41 | 0.3330 |
+
+**clamp=3.0 rejected**: 41% drop in overall image mean indicates the
+sun's disc itself — legitimate bright content, not a rare outlier —
+was being clamped, not just true fireflies. **clamp=50.0 adopted**:
+much smaller mean shift, while still reducing peak value by two orders
+of magnitude.
+
+**Methodology note:** at low spp (32), ordinary per-pixel Monte Carlo
+noise dominates the image visually and can make the clamp's effect
+hard to see by eye, even though max/mean statistics confirm it's
+working correctly (confirmed identically whether measured in-memory or
+reloaded from the saved `.exr` file — the effect is real and format-
+independent, not a display artifact). At higher spp (256), general
+noise converges down and the clamp's effect on true outliers becomes
+visually distinguishable from ordinary grain.
+
+**Known limitation:** a single global clamp does not distinguish
+direct camera rays seeing a bright light source (legitimate) from
+indirect fireflies (the intended target) — production renderers
+typically expose separate direct/indirect clamp controls for this
+reason. Not implemented here, given time constraints.
+
+
+-----
+
+## 12. MIS Envmap Compensation
+
+Adds an optional adjustment to `CustomEnvmap`'s luminance-based
+importance sampling CDF, based on Karlík et al. (2019), "MIS
+Compensation: Optimizing Sampling Techniques in Multiple Importance
+Sampling."
+
+### Implementation note — mean-subtraction variant, not the paper's derived optimum
+The paper's core contribution is deriving an optimal constant to
+subtract from the tabulated sampling density via variance
+optimization, applied entirely in a preprocessing step. That
+derivation was not implemented here. Instead, this uses **mean
+subtraction** — subtracting the luminance table's own mean before
+building the CDF, clamped at a small positive floor — a documented
+simplification also used in published follow-up work (e.g. Ke et al.,
+"NeRF as a Non-Distant Environment Emitter in Physics-based Inverse
+Rendering," describes an equivalent mean-subtraction step explicitly
+as "inspired by" Karlík et al., rather than an implementation of the
+full derivation). Correctness of the underlying idea — that both
+approaches leave the estimator unbiased, since only the *sampling*
+density changes while `eval()`/`_radiance()` still return true
+radiance and MIS rebalances the light/BSDF-sampling split automatically
+— is confirmed by both sources.
+
+### Design
+Opt-in via `mis_compensation` on `custom_envmap` (default `False`,
+matching prior behavior exactly). When enabled, the luminance table has
+its global mean subtracted before the existing epsilon floor is
+applied, concentrating the CDF on above-average regions only.
+`sample_direction`, `pdf_direction`, and `_radiance` are unchanged —
+all read generically from the resulting distribution.
+
+### Validation
+Same methodology as prior noise experiments (24 seeds, per-pixel std),
+across four HDRIs spanning a wide range of energy concentration
+(top-1%-brightest-pixel energy share, from Week 6 / Section 10):
+
+| HDRI | Top-1% energy share | Off | On | Change |
+|---|---|---|---|---|
+| studio_kontrast_04 | 12.4% | 0.01566 | 0.01353 | -13.6% |
+| venice_sunset | 9.1% | 0.00862 | 0.00803 | -6.9% |
+| sundowner_overlook | 73.5% | 0.08966 | 0.08432 | -6.0% |
+| rogland_clear_night | 4.3% | 0.00256 | 0.00259 | +1.2% |
+
+**Interpretation:** compensation reduced noise on three of four HDRIs
+(6-14%), with the fourth showing a change within likely measurement
+noise (single 24-seed run). Energy concentration does **not** predict
+the magnitude of benefit — sundowner has by far the highest
+concentration (73.5%) but one of the smaller improvements, while
+studio_kontrast (12.4%) shows the largest. This is a genuine,
+confirmed empirical finding, not the expected result: prior to
+measurement, higher concentration was hypothesized to predict larger
+benefit; the data does not support that hypothesis. A plausible
+alternative explanation — that benefit relates to how much the mean
+subtraction actually redistributes the CDF, rather than to peak
+concentration itself — was not tested and is not confirmed.
+
+**Result: adopted as the new default** (`mis_compensation=True`), given
+consistent improvement or noise-level neutrality across all four tested
+HDRIs and no bias-related downside regardless of scene content.

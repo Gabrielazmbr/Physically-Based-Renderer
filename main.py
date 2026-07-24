@@ -25,19 +25,16 @@ from assets.scenes.depth_of_field import depth_of_field_scene
 
 # ───────────────────────────────────────────────────────────────
 
-scene_dict = depth_of_field_scene()
+scene_dict = environment_lighting_scene()
 scene_dict["sensor"]["type"] = "physical_camera"
 scene = mi.load_dict(scene_dict)
 sensor = scene.sensors()[0]
 
 
-ray, w = sensor.sample_ray(time=0, sample1=0.5, sample2=mi.Point2f(0.5, 0.5), sample3=mi.Point2f(0.5, 0.5))
-print("direction:", ray.d)
 
 
-
-scene_name = "depth_of_field_scene_ISVALID_MitsubaPerspective"
-test_name = "DOPValidation"
+scene_name = "environment_lighting_scene_Firefly_comparison_ClampDisabled"
+test_name = "FireflyHandlingValidation"
 spp = 256
 
 # ───────────────────────────────────────────────────────────────

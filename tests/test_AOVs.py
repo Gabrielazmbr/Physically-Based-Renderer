@@ -40,7 +40,7 @@ arr = np.array(img)
 print("Rendered image shape:", arr.shape)
 
 rgb = arr[..., 0:3]
-mi.util.write_bitmap("outputs/aov_rgb.png", rgb)
+mi.util.write_bitmap("outputs//AOVs_Validation/aov_rgb.png", rgb)
 
 if arr.shape[-1] >= 10:
     # assumes layout: [R,G,B, albedo.R,G,B, normal.X,Y,Z, depth.Y]

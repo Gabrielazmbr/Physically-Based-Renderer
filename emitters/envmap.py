@@ -21,6 +21,9 @@ class CustomEnvmap(mi.Emitter):
         })
         self.scale = props.get("scale", 1.0)
         self.importance = props.get("importance", True)  # switch: True=importance, False=uniform
+        self.mis_compensation = props.get("mis_compensation", True) # Only affects importance=True.
+        # Karlik - mis_compensation subtract mean luminance before building the CDF, clamped at 0, so importance sampling
+        # concentrates only on above-average regions (example a sun disc) to avoid competing with BSDF sampling on already-flat background.
 
         self.m_flags = mi.EmitterFlags.Infinite
         self.bsphere_radius = 1.0
@@ -48,7 +51,12 @@ class CustomEnvmap(mi.Emitter):
         luminance = 0.2126*small[..., 0] + 0.7152*small[..., 1] + 0.0722*small[..., 2]
         theta = (np.arange(self.res_y) + 0.5) / self.res_y * math.pi
         sin_theta = np.sin(theta)[:, None]
-        weighted = np.maximum(luminance * sin_theta, 1e-8).astype(np.float32)
+        weighted = luminance * sin_theta
+
+        if self.mis_compensation:
+            weighted = weighted - weighted.mean()  # global mean of the whole map - standard form of the technique
+
+        weighted = np.maximum(weighted, 1e-8).astype(np.float32) # same epsilon floor as before, now applied after the optional subtraction
 
         self.distribution = mi.DiscreteDistribution2D(weighted)
 

@@ -30,7 +30,7 @@ CONFIGS = [
 def build_scene(envmap_overrides):
     scene_dict = environment_lighting_scene(HDRI)
     scene_dict["sensor"]["sampler"] = {"type": "independent", "sample_count": SPP}
-    scene_dict["emitter"] = {"type": "custom_envmap", "filename": HDRI, "importance": True, **envmap_overrides}
+    scene_dict["emitter"] = {"type": "custom_envmap", "filename": HDRI, "importance": True, "mis_compensation": False, **envmap_overrides}
     return mi.load_dict(scene_dict)
 
 def measure_noise(envmap_overrides):

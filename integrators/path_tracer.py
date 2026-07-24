@@ -12,6 +12,8 @@ class PathTracer(mi.SamplingIntegrator):
         self.max_depth = props.get("max_depth", 8) # The maximum number of bounces allowed for a ray.
         self.rr_depth = props.get("rr_depth", 3) # Russian Roulette starts after bounce 3.
         self.with_aovs = props.get("with_aovs", False) # Handles AOVs if asked
+        self.firefly_clamp = props.get("firefly_clamp", 0.0)
+        # Caps any single sample contribution to a pixel. 0.0 = disabled (default).
 
     @dr.syntax
     # Decorator for handling Python loops (while statement) into vectorized kernels.
@@ -80,7 +82,13 @@ class PathTracer(mi.SamplingIntegrator):
                 prev_delta, mi.Float(1), self.mis_weight(prev_bsdf_pdf, em_pdf)
             ) # Compares BSDF PDF against Emitter PDF. Adds appropiate weight to each method using mis_weight() power heuristic.
 
-            result += throughput * si.emitter(scene).eval(si, active) * mis_bsdf
+            bsdf_hit_contrib = throughput * si.emitter(scene).eval(si, active) * mis_bsdf
+            bsdf_hit_contrib = dr.select(
+                self.firefly_clamp > 0,
+                dr.minimum(bsdf_hit_contrib, self.firefly_clamp),
+                bsdf_hit_contrib,
+            ) # firefly_clamp caps the per-sample contribution before it's added, when enabled
+            result += bsdf_hit_contrib
             # On new path: energy lost along the path so far * radiance of emitter (from surface) * MIS weight
 
             # Update valid_ray
@@ -113,11 +121,16 @@ class PathTracer(mi.SamplingIntegrator):
             bsdf_pdf = bsdf.pdf(bsdf_ctx, si, wo, active_em) # Computes BSDF PDF. Measures probability on tracing a path using BSDF sampling over light sampling.
             mis_em = dr.select(ds.delta, mi.Float(1), self.mis_weight(ds.pdf, bsdf_pdf)) # Compares Emitter PDF against BSDF PDF. Adds appropiate weight to each method using mis_weight() power heuristic.
 
-            result += dr.select(
-                active_em,
-                throughput * bsdf_val * emitter_radiance * mis_em,
-                mi.Color3f(0),
-            ) # On new path: energy lost along the path so far * radiance of emitter (from surface) * MIS weight, explicitly masks NEE contribution
+
+            nee_contrib = throughput * bsdf_val * emitter_radiance * mis_em
+            nee_contrib = dr.select(
+                self.firefly_clamp > 0,
+                dr.minimum(nee_contrib, self.firefly_clamp),
+                nee_contrib,
+            ) # firefly_clamp caps the per-sample contribution before it's masked/added, when enabled
+            result += dr.select(active_em, nee_contrib, mi.Color3f(0))
+            # On new path: energy lost along the path so far * radiance of emitter (from surface) * MIS weight, explicitly masks NEE contribution
+
 
             # Step 4: BSDF sampling, choose next direction
             bsdf_sample, bsdf_weight = bsdf.sample(

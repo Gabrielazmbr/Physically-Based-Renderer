@@ -17,7 +17,7 @@ N_SEEDS = 24  # matches Week 6 methodology
 def build_scene(sampler_type):
     scene_dict = environment_lighting_scene(HDRI)
     scene_dict["sensor"]["sampler"] = {"type": sampler_type, "sample_count": SPP}
-    scene_dict["emitter"] = {"type": "custom_envmap", "filename": HDRI, "importance": True}
+    scene_dict["emitter"] = {"type": "custom_envmap", "filename": HDRI, "importance": True, "mis_compensation": False}
     return mi.load_dict(scene_dict)
 
 def measure_noise(sampler_type):
