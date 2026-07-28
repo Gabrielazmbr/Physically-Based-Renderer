@@ -21,6 +21,15 @@ def principled(roughness, metallic):
         "metallic": metallic,
     }
 
+def principled_burley(roughness, metallic):
+    return {
+        "type": "principled_bsdf",
+        "diffuse_model": "burley",
+        "base_colour": [1.0, 1.0, 1.0],
+        "roughness": roughness,
+        "metallic": metallic,
+    }
+
 def principled_zero_specular(roughness):
     """
     specular=0.0, metallic=0.0 — zero-specular Lambertian
@@ -58,6 +67,14 @@ for r in roughness_values:
     arr = np.array(img)[..., :3]
     print(f"{r:>9.1f} {spp:>6} {17:>6} {arr.mean():>8.4f} {arr.std():>8.4f}")
 
+
+print(f"\nBurley diffuse (metallic=0.0, diffuse_model=burley)")
+print(f"{'Roughness':>9} {'SPP':>6} {'Seed':>6} {'Mean':>8} {'Std':>8}")
+for r in roughness_values:
+    scene = mi.load_dict(white_furnace_scene(principled_burley(r, 0.0), integrator_type="path_tracer", spp=spp))
+    img = mi.render(scene, spp=spp, seed=23)
+    arr = np.array(img)
+    print(f"{r:>9.1f} {spp:>6} {23:>6} {arr.mean():>8.4f} {arr.std():>8.4f}")
 
 """
 SPP Increase.

@@ -606,3 +606,397 @@ concentration itself — was not tested and is not confirmed.
 **Result: adopted as the new default** (`mis_compensation=True`), given
 consistent improvement or noise-level neutrality across all four tested
 HDRIs and no bias-related downside regardless of scene content.
+
+
+-----
+
+## 13. Anisotropic GGX
+
+Adds directional roughness (`alpha_u`/`alpha_v` instead of a single
+`alpha`), producing an elongated, oriented specular highlight —
+brushed metal, satin, hair-like materials — aligned to the surface's
+UV tangent direction (`dp_du`), matching the convention used by
+Mitsuba's own `roughconductor`/`roughdielectric` plugins.
+
+### Design
+New `anisotropic` parameter (Disney/Blender convention, default `0.0`
+= isotropic, identical to previous behavior exactly). `alpha_u`/`alpha_v`
+derived from the existing `roughness` via an aspect-ratio split
+(`aspect = sqrt(1 - 0.9*anisotropic)`), so the two collapse back to the
+original single alpha when `anisotropic=0`.
+
+Since the surface tangent is always perpendicular to the shading
+normal, aligning the microfacet evaluation to it is purely a rotation
+about the local Z axis — `cos_theta_i`/`cos_theta_o` (and therefore
+every existing masking/validity check in `sample()`/`eval()`/`pdf()`)
+are unaffected by the rotation and needed no changes.
+
+**Scope note:** alignment follows the surface's UV parameterization
+only — no separate user-controlled rotation offset (Blender's
+"Anisotropic Rotation" parameter). This matches Mitsuba's own built-in
+anisotropic BSDFs, and a fully general rotation control is a genuinely
+open problem even in Mitsuba's own upstream Principled BSDF as of a
+recent issue — reasonable to scope out here as well. On a mesh missing
+valid UV/tangent data, orientation falls back to an arbitrary (though
+non-degenerate) direction — a known limitation of UV-dependent
+anisotropy in general, not specific to this implementation.
+
+### Bug found and fixed during validation
+The chi-squared suite initially failed catastrophically on every
+config with a nonzero specular lobe (previously-passing p-values
+collapsing to p≈0, PDF integrating up to 61× over 1.0) after this
+change, while the furnace tests (real geometry) passed cleanly. Root
+cause: the chi-squared harness constructs a synthetic
+`SurfaceInteraction3f` directly rather than from a real ray
+intersection, leaving `dp_du` at its zero-initialized default — a
+degenerate tangent. The tangent-alignment rotation silently collapsed
+every direction's azimuthal component to zero in this case, destroying
+the sampled distribution's shape while leaving total energy roughly
+intact (explaining why histogram sums stayed plausible even as chi²
+exploded). Fixed by falling back to an identity rotation whenever the
+tangent is degenerate (length < 1e-6), confirmed via direct testing
+that both the built-in `sphere`/`rectangle` primitives and a PLY mesh
+lacking UV coordinates return valid, non-degenerate `dp_du` — so this
+fallback path is specifically for hand-built `SurfaceInteraction3f`
+objects (as in the chi-squared harness), not expected to trigger on
+any real rendered geometry.
+
+### Validation
+- **Regression**: full `run_all.sh` suite (furnace, chi-squared) —
+  identical to pre-change baseline at `anisotropic=0` (default),
+  confirming the tangent-rotation machinery is inert when unused.
+- **Visual**: brushed-metal disc, `roughness=0.25`, `metallic=1.0`,
+  single point light. `anisotropic=0.0` shows no strong highlight at
+  the tested light angle (expected — round GGX highlights are narrow
+  and angle-sensitive); `anisotropic=0.8` shows a clearly wedge-shaped,
+  radially-elongated highlight following the disc's tangent direction
+  — confirming both that anisotropy is present and that its
+  orientation follows real per-point surface geometry rather than a
+  fixed axis.
+
+
+
+-----
+
+## 14. Bladed (Polygonal) Bokeh
+
+Adds an optional polygonal aperture shape to `PhysicalCamera`, in place
+of the default circular aperture — reproducing the hexagonal/pentagonal
+out-of-focus highlights ("bokeh") caused by a real camera's finite
+number of aperture blades.
+
+### Design
+Two new parameters: `aperture_blades` (default `0` = circular, identical
+to previous behavior) and `aperture_rotation` (optional, degrees).
+When `aperture_blades >= 3`, the aperture is sampled as a regular
+polygon: split into N triangular wedges from center to each pair of
+adjacent vertices, wedge selected via the same stratified-remainder
+technique already used in `CustomEnvmap.sample_direction`, then sampled
+uniformly within the chosen wedge via the standard sqrt-barycentric
+method. Only `_sample_aperture()` and one line in `sample_ray()`
+changed — no other camera logic touched.
+
+### Validation
+- **Regression**: `validate_physical_camera.py`'s pinhole-equivalence
+  test reproduces the prior result exactly (0.00065), confirming
+  `aperture_blades=0` remains a true no-op.
+- **Visual**: three small, bright, heavily out-of-focus point lights
+  against a dark background — the clearest way to reveal aperture
+  shape directly in the blur pattern. `aperture_blades=0` renders clean
+  circles (as in all prior DoF tests); `aperture_blades=6` renders
+  clearly hexagonal highlights with sharp, flat edges, consistently
+  oriented across all three independent light sources — confirming
+  both the polygonal shape and the shared, consistent rotation are
+  correctly applied.
+
+**Result: PASS.**
+
+
+-----
+
+
+## 15. Burley Diffuse Model
+
+Adds Disney/Burley (2012)'s diffuse retro-reflection term as an
+alternative to the existing plain Lambertian diffuse lobe — a
+roughness-dependent brightening (or, at low roughness, mild darkening)
+toward grazing angles, matching measured behavior of real rough
+materials (cloth, paper) that plain Lambertian does not reproduce.
+
+### Design
+New `diffuse_model` parameter (`"lambert"` default — identical to
+previous behavior exactly; `"burley"` opt-in). Applied as a
+multiplicative correction (`fd_i * fd_o`) on top of the existing
+Fresnel energy-conservation gate — a deliberate combination of two
+separate ideas from two different sources, not something either
+specifies together. Reuses `cos_theta_h` already computed for the
+specular Fresnel term (valid since `cos_theta_d = dot(wi,h) =
+dot(wo,h)` by definition of the half-vector). Only `eval()` changed —
+`sample()`'s weight already flows through `eval(wo)/bs.pdf`, so no
+sampling-side logic needed updating.
+
+### Validation
+
+**Regression**: `run_all.sh` at default `diffuse_model="lambert"` —
+unchanged, confirmed identical to established baseline.
+
+**Angle sweep** (direct `eval()` comparison, lambert vs burley, same
+material, roughness × incidence-angle × exit-angle grid):
+
+| Roughness | theta_i=0,theta_o=0 | Most grazing (80,80) | Pattern |
+|---|---|---|---|
+| 0.1 | 1.0000 | 0.7822 | Mild darkening |
+| 0.5 | 1.0000 | 1.4142 | Brightening |
+| 0.9 | 1.0000 | 2.1973 | Strong brightening |
+
+**Result: PASS.** Exact `ratio=1.0000` at normal incidence confirmed at
+every roughness (mathematical property of the formula, not an
+approximation). Direction of the effect (darkening vs brightening)
+correctly flips between low and high roughness, exactly as the
+formula's `FD90` term predicts.
+
+**Furnace** (metallic=0, `diffuse_model=burley`):
+
+| Roughness | Mean | Std |
+|---|---|---|
+| 0.0 | 0.9781 | 0.0304 |
+| 0.5 | 0.9832 | 0.0626 |
+| 1.0 | 0.9890 | 0.0572 |
+
+**Interpretation:** furnace means sit consistently ~1-2% below 1.0,
+rather than the old Lambertian pattern's monotonic decline with
+roughness (1.0001 → 0.9582). This is the correct, expected consequence
+of the angle-sweep behavior above, not a new energy-conservation
+concern: Burley's term is a perceptual retro-reflection model fit to
+measured material appearance, not designed to be energy-conserving in
+isolation, and was never claimed to be by its original source.
+
+
+
+------- Part #4 -------- Improvements to BSDF, IBL, Camera and Path tracer
+
+
+## 16. Transmission / Refraction (Smooth Dielectric)
+
+Adds smooth (non-rough) dielectric transmission to `principled_bsdf` —
+refraction via Snell's law, Fresnel-weighted reflect/transmit split,
+and total internal reflection.
+
+### Design
+Transmission enters as a **top-level blend**, not as a third lobe
+inside the existing specular/diffuse mixture:
+
+BSDF = transmission x (smooth dielectric) + (1 - transmission) x (opaque BSDF)
+
+
+Rationale: a smooth dielectric is a *delta* lobe, whereas the existing
+mixture is built entirely around non-delta lobes with real pdfs. Mixing
+a delta into that mixture would require special-casing the pdf
+throughout. As an outer blend, the existing mixture code is untouched
+and the branch is bypassed entirely at `transmission=0`.
+
+Parameters: `transmission` (0.0 default = fully opaque, texture-capable)
+and `ior` (1.5 default). `sample1` is rescaled after the branch decision
+so each branch still receives a uniform variate, avoiding the need for a
+fourth random input. Rays arriving from inside the medium are forced
+down the dielectric branch, since the opaque lobes are undefined there.
+
+`transmission` is deliberately **not** clamped against `metallic`,
+following Disney's convention of treating parameters as independent —
+nonphysical combinations are therefore possible, and are the scene
+author's responsibility.
+
+TIR requires no special-casing: `mi.fresnel` returns F = 1 past the
+critical angle, so the reflect/transmit split handles it automatically.
+
+### Bug found and fixed during validation
+Initial implementation scaled only `sample()` by the blend factor,
+leaving `eval()` and `pdf()` unscaled. At `transmission=1.0` — pure
+glass — `eval()` therefore still returned the full opaque diffuse +
+specular BSDF, and since NEE calls `eval()` at every bounce, this
+injected light from a lobe that should not exist. Measured as a **4.2%
+energy gain** (mean 1.0420 vs the reference's 0.9981, with a maximum of
+1.230 in a scene where no pixel can physically exceed 1.0).
+
+Not caught by the analytic tests, which exercise only `sample()`.
+Fixed by applying `(1 - transmission)` consistently to `eval()`,
+`pdf()`, and `sample()`'s reported `bs.pdf`; the branch probability
+`transmission` was likewise folded into the dielectric branch's pdf.
+Weights remain correct because the factor appears in both value and
+pdf and cancels — which is also why the analytic tests passed despite
+the bug.
+
+### Methodology note — the furnace test *is* usable for glass
+Initially assumed unusable, on the grounds that light passes through
+rather than reflecting back. This is incorrect: in a **uniform
+radiance field** (constant emitter), radiance is preserved through any
+lossless dielectric regardless of refraction, so every pixel must read
+exactly 1.0. This is what exposed the energy-gain bug above, and is a
+valid energy-conservation test for transmissive materials.
+
+### Validation
+All four tests compare against Mitsuba's built-in smooth `dielectric`
+at matched IOR (1.5).
+
+**1. Fresnel split and radiance scaling** (200k samples per angle):
+
+| theta | reflect frac (mine / ref / Fresnel F) | w_refl | w_tran |
+|---|---|---|---|
+| 10 | 0.0397 / 0.0397 / 0.0400 | 1.0000 | 0.4444 |
+| 45 | 0.0497 / 0.0497 / 0.0502 | 1.0000 | 0.4444 |
+| 70 | 0.1705 / 0.1705 / 0.1710 | 1.0000 | 0.4444 |
+| 85 | 0.6129 / 0.6129 / 0.6128 | 1.0000 | 0.4444 |
+
+Transmitted weight of 0.4444 = 1/eta^2 confirms the radiance
+compression factor on entering a denser medium (flux is conserved;
+radiance is not).
+
+**2. Total internal reflection** (from inside, critical angle 41.81 deg):
+
+| theta | reflect frac (mine / ref) |
+|---|---|
+| 20.0 | 0.0414 / 0.0414 |
+| 39.8 | 0.2283 / 0.2283 |
+| 40.0 | 0.2440 / 0.2440 |
+| 43.8 | 1.0000 / 1.0000 |
+| 60.0 | 1.0000 / 1.0000 |
+
+Monotonic rise approaching the critical angle, then exactly 1.0 past
+it — no light transmits, as required.
+
+**3. Delta-lobe convention:** `eval()` and `pdf()` both return exactly
+zero for transmitted directions, matching the reference.
+
+**4. Render test** — glass sphere over a checkerboard floor, exercising
+what the analytic tests cannot: back-side hits on real geometry,
+multi-bounce enter/exit paths, and the path tracer's `prev_delta` MIS
+handling firing on `DeltaTransmission` events (`mi.BSDFFlags.Delta` =
+97 = Null | DeltaReflection | DeltaTransmission, so the existing MIS
+logic required no changes).
+
+**Result: mean absolute difference 0.00000 — pixel-identical to
+Mitsuba's `dielectric`.** Both implementations receive the same random
+stream (drawn by the integrator, not the BSDF) and make identical
+Fresnel-driven branch decisions, so bit-identical output is the
+expected outcome of two correct implementations, not a coincidence.
+Visually: checkerboard correctly inverted through the sphere, with
+refraction-compressed banding near the silhouette.
+
+### Known limitations
+- **Smooth transmission only.** Rough/frosted glass is not
+  representable; the transmitted lobe ignores `roughness`. Rough
+  transmission would require the GGX distribution applied to
+  refraction, including the refraction Jacobian, and was scoped out.
+- **No volumetric absorption.** `base_colour` tints transmitted
+  radiance per interface, but this is not distance-dependent
+  Beer-Lambert absorption through the medium, so thick and thin glass
+  of the same colour tint identically.
+- **No dispersion**, so no physically-derived chromatic aberration.
+
+
+------
+
+## 17. OIDN Post-Process Denoising
+
+Integrates Intel Open Image Denoise as a post-process stage, using the
+albedo and normal AOVs (Section 9) as auxiliary feature buffers.
+Distinct in kind from the sampling-side noise work in Section 10: those
+reduce variance at the source, this filters the rendered result,
+trading a controlled bias for reduced noise.
+
+Implemented in `denoisers/oidn.py` — deliberately not a Mitsuba plugin,
+as it operates on a finished image rather than participating in light
+transport. Depends on `pyoidn`.
+
+### Diagnostic process — three hypotheses falsified, one confirmed
+Initial integration ran without error but changed the image by only
+~0.4%. Four candidate causes were tested:
+
+1. **Non-contiguous input arrays** — falsified. `pyoidn` validates
+   contiguity and raises `ValueError` explicitly; it never silently
+   accepted a bad buffer.
+2. **HDR autoexposure misestimation** — falsified. Forcing
+   `inputScale=1.0` and clamping outliers both left the result
+   unchanged.
+3. **Degenerate albedo poisoning the demodulation** (albedo is zero
+   where rays miss geometry) — falsified, and in the opposite
+   direction: removing the auxiliary buffers entirely made filtering
+   *weaker* (0.00113 vs 0.00176), not stronger.
+4. **Reconstruction filter correlating the noise** — **confirmed by
+   direct measurement.**
+
+### Confirmed mechanism: reconstruction filter
+Lag-1 spatial autocorrelation of the noise residual (noisy minus
+converged reference), Cornell box, 16 spp:
+
+| rfilter | Autocorrelation (h / v) | OIDN response |
+|---|---|---|
+| gaussian (Mitsuba default) | +0.279 / +0.187 | 0.2% — negligible |
+| box | -0.062 / +0.001 | 9.4% — filters normally |
+
+A Gaussian reconstruction filter distributes each sample across
+neighbouring pixels, correlating their noise. OIDN is trained on
+box-filtered renders where per-pixel noise is independent;
+spatially-correlated noise resembles low-frequency signal to the
+network and is preserved rather than removed. This matches OIDN's own
+guidance recommending box-filtered input.
+
+**Practical consequence:** any render intended for denoising must use
+`"rfilter": {"type": "box"}`. This is a scene-configuration
+requirement, not a code change.
+
+### Metric artefact: directly-visible emitters
+Even with box filtering, RMSE initially showed denoising making the
+image *worse*. Localising the error revealed the cause: **0.59% of
+pixels (the light source) contributed 98% of the squared error.**
+
+OIDN demodulates by albedo — dividing colour by albedo, filtering, then
+re-multiplying — which assumes `colour = albedo x illumination`. That
+assumption is false for emissive surfaces, whose colour is emitted
+radiance unrelated to their albedo, so the filter smears a very sharp,
+very bright edge. Because RMSE is quadratic, this small region
+dominated the metric while remaining nearly invisible to the eye —
+the denoised images looked clearly better throughout.
+
+Addressed by `denoise_composite()`, which restores original pixels
+wherever luminance exceeds a threshold (default 2.0), matching standard
+production practice of excluding directly-visible emitters from
+denoising.
+
+**Known limitation:** the luminance threshold is a heuristic and is
+scene-dependent — a value appropriate for the Cornell box incorrectly
+masked over 1% of pixels in the HDRI environment scene, whose 99th
+percentile is 2.26. The principled alternative is a dedicated emission
+AOV, captured at the first hit and subtracted before denoising then
+added back after, removing the magic number entirely. Not implemented.
+
+### Validation
+Cornell box, box rfilter, 1024 spp reference. Emitter covers 0.59% of
+pixels. Starred columns exclude it — error there reflects the restored
+noisy input, not denoiser output.
+
+| spp | noisy | denoised | change | noisy* | denoised* | change* |
+|---|---|---|---|---|---|---|
+| 16 | 0.03991 | 0.03253 | -18.5% | 0.02955 | 0.01832 | -38.0% |
+| 32 | 0.03418 | 0.03060 | -10.5% | 0.02192 | 0.01571 | -28.3% |
+| 64 | 0.02303 | 0.01982 | -13.9% | 0.01604 | 0.01090 | -32.0% |
+| 128 | 0.01805 | 0.01626 | -9.9% | 0.01157 | 0.00852 | -26.4% |
+| 256 | 0.01346 | 0.01227 | -8.8% | 0.00875 | 0.00676 | -22.7% |
+| 512 | 0.00884 | 0.00806 | -8.8% | 0.00601 | 0.00478 | -20.4% |
+
+**Result: PASS.** Error reduced at every tested sample count. Relative
+benefit decreases as spp rises, as expected — less noise remains to
+remove.
+
+**Effective sample multiplier:** denoised 16 spp (excl. emitter,
+0.01832) falls between undenoised 32 spp (0.02192, worse) and 64 spp
+(0.01604, better) — so denoising is worth **between 2x and 4x** the
+sample count on this scene. The crossover was not bisected further.
+
+### Open question
+On the Cornell box at 64 spp, colour-only denoising slightly outperformed
+colour + albedo + normal (0.00897 vs 0.00917), whereas on the HDRI
+environment scene the auxiliary buffers improved filtering by ~55%. Not
+characterised further. Also noted: OIDN rejects `normal` supplied
+without `albedo` ("unsupported combination of input features") — albedo
+is a prerequisite for using normal.
