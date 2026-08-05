@@ -26,7 +26,7 @@ class CustomEnvmap(mi.Emitter):
         # concentrates only on above-average regions (example a sun disc) to avoid competing with BSDF sampling on already-flat background.
 
         self.m_flags = mi.EmitterFlags.Infinite
-        self.bsphere_radius = 1.0
+        self.bsphere_radius = 1e6
 
         self.to_world = self.world_transform()
         self.to_world_inv = self.to_world.inverse()
@@ -60,9 +60,12 @@ class CustomEnvmap(mi.Emitter):
 
         self.distribution = mi.DiscreteDistribution2D(weighted)
 
+
     def set_scene(self, scene):
+        # Only ever lengthens the shadow ray, never shortens it -- so if this
+        # does get called, it cannot reintroduce the truncation bug above.
         bbox = scene.bbox()
-        self.bsphere_radius = dr.norm(bbox.max - bbox.min) * 0.5
+        self.bsphere_radius = dr.maximum(dr.norm(bbox.max - bbox.min) * 0.5, self.bsphere_radius)
 
     def _dir_to_uv(self, d):
         d_local = dr.normalize(mi.Vector3f(self.to_world_inv @ mi.Vector3f(d)))

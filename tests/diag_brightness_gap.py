@@ -2,7 +2,7 @@
 """
 Direct eval() comparison: principled_bsdf vs Mitsuba's built-in
 principled, at the exact material parameters the Blender export used
-(base_color=0.8 grey, metallic=0, specular=0.5 -> F0=0.04, matching
+(base_color=0.8 grey, metallic=0, specular=0.5 - F0=0.04, matching
 hardcoded dielectric F0 exactly), across a roughness sweep. If the ratio
 grows with roughness, that's the multi-scatter compensation signature;
 if it's flat, it's something else.

@@ -4,5 +4,6 @@ __pycache__/
 *.exr
 *.png
 *.jpg
+*.obj
 outputs/
 .DS_Store

@@ -3,7 +3,7 @@ import mitsuba as mi
 def white_furnace_scene(bsdf, integrator_type="path_tracer", spp=256, max_depth=16):
     """
     Validates: energy conservation for a given BSDF + integrator pair.
-    Expected: sphere completely invisible against white background (mean -> 1.0).
+    Expected: sphere completely invisible against white background (mean = 1.0).
     """
     return {
         "type": "scene",

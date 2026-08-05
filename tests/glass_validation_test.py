@@ -50,7 +50,7 @@ def stats(bsdf, theta, from_inside=False, seed=0):
 mine = mi.load_dict({"type": "principled_bsdf", "base_colour": [1.0,1.0,1.0], "roughness": 0.0, "metallic": 0.0, "transmission": 1.0, "ior": IOR})
 ref = mi.load_dict({"type": "dielectric", "int_ior": IOR, "ext_ior": 1.0})
 
-print("=== 1. Entering the surface (outside -> inside) ===")
+print("=== 1. Entering the surface (outside - inside) ===")
 print(f"{'theta':>6} {'':>10} {'refl frac':>10} {'w_refl':>9} {'w_tran':>9}")
 for theta in [10, 45, 70, 85]:
     F = float(mi.fresnel(mi.Float(math.cos(math.radians(theta))), mi.Float(IOR))[0][0])
@@ -59,7 +59,7 @@ for theta in [10, 45, 70, 85]:
         print(f"{theta:>6} {label:>10} {s['refl_frac']:>10.4f} {s['w_refl']:>9.4f} {s['w_tran']:>9.4f}")
     print(f"{'':>6} {'(Fresnel F)':>10} {F:>10.4f}   expected w_tran = {1/IOR**2:.4f}")
 
-print("\n=== 2. Total internal reflection (inside -> outside) ===")
+print("\n=== 2. Total internal reflection (inside - outside) ===")
 crit = math.degrees(math.asin(1.0/IOR))
 print(f"  critical angle = {crit:.2f} deg; past it, refl frac must be 1.0")
 print(f"{'theta':>6} {'':>10} {'refl frac':>10}")

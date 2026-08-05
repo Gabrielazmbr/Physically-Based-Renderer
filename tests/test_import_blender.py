@@ -58,4 +58,4 @@ own_img = mi.render(own_scene, spp=128)
 
 mi.util.write_bitmap("outputs/SceneImportTest/import_test_reference_01.png", ref_img)
 mi.util.write_bitmap("outputs/SceneImportTest/import_test_custom_01.png", own_img)
-print("Wrote import_test_reference.png (Mitsuba built-ins) and import_test_custom.png (your stack)")
+print("Wrote import_test_reference.png (Mitsuba built-ins) and import_test_custom.png")

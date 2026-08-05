@@ -17,7 +17,7 @@ class PhysicalCamera(mi.ProjectiveCamera):
         film_size = self.film().size()
         aspect = film_size.x / film_size.y
         # tan(half-fov) gives the film-plane half-extent at z=1 in camera space —
-        # standard perspective setup, same quantity your existing "perspective"
+        # standard perspective setup
         # sensor already uses internally.
         self.tan_fov = dr.tan(dr.deg2rad(self.fov) / 2.0)
         self.aspect = aspect
@@ -26,11 +26,6 @@ class PhysicalCamera(mi.ProjectiveCamera):
         return True
 
     def sample_ray(self, time, sample1, sample2, sample3, active=True):
-        # Matching Mitsuba Camera
-        #x = (2.0 * sample2.x - 1.0) * self.tan_fov * self.aspect
-        #y = -(2.0 * sample2.y - 1.0) * self.tan_fov
-
-        # Matching Blender Export
         x = -(2.0 * sample2.x - 1.0) * self.tan_fov
         y = -(2.0 * sample2.y - 1.0) * self.tan_fov / self.aspect
         d_cam = dr.normalize(mi.Vector3f(x, y, 1.0))

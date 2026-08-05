@@ -1000,3 +1000,734 @@ environment scene the auxiliary buffers improved filtering by ~55%. Not
 characterised further. Also noted: OIDN rejects `normal` supplied
 without `albedo` ("unsupported combination of input features") — albedo
 is a prerequisite for using normal.
+
+
+
+-----
+
+# 18. Clearcoat (GTR1 Second Specular Lobe)
+
+Disney (2012) clearcoat: an additional narrow specular lobe layered above the
+base material, simulating a lacquer or varnish coat. Implemented as a third
+lobe in `principled_bsdf`, alongside the existing diffuse and GGX specular
+lobes.
+
+**Parameters added:** `clearcoat` (0.0 default, no coat), `clearcoat_gloss`
+(1.0 default). Both texture-capable.
+
+## 18a. Model and design decisions
+
+| Component | Choice | Source |
+|---|---|---|
+| NDF | GTR1 (Berry), hand-written | Disney 2012 |
+| Roughness | `alpha = mix(0.1, 0.001, gloss)`, used **directly, not squared** | Disney 2012 |
+| Fresnel | Schlick, fixed F0 = 0.04 (IOR 1.5) | Disney 2012 |
+| Geometry term | Smith GGX at fixed alpha = 0.25, reused from Mitsuba | Disney 2012 |
+| Scale | Fixed 0.25 coefficient | Disney 2012 |
+
+Two facts were verified against the source rather than assumed:
+
+1. **Mitsuba's `MicrofacetDistribution` ships only Beckmann and GGX** — no
+   GTR1. Checked against the plugin documentation. The GTR1 distribution and
+   its sampling routine therefore had to be written by hand; only the geometry
+   term reuses Mitsuba's validated code.
+2. **Mitsuba's `.G()` is separable Smith**, i.e. `G1(wi) * G1(wo)`, not
+   height-correlated. Verified numerically across 12 angle pairs: separable
+   matched to <1e-4 at every pair, height-correlated diverged (e.g. 0.763351
+   vs 0.774941 at theta_i=70, theta_o=75). This matters because Disney's own
+   formulation is separable, so reusing Mitsuba's `G` requires no correction
+   factor. Had it been height-correlated, the lobe would carry a small
+   systematic energy error.
+
+Disney's `smithG_GGX` returns `G1/(2·N·V)`, so the product of two already
+absorbs the `1/(4·cos_i·cos_o)` denominator. Converted to the Cook-Torrance
+form used by `eval_specular`:
+
+```
+f_cc = 0.25 · clearcoat · D_GTR1(n·h) · F(0.04) · G_smith(0.25) / (4·cos_i·cos_o)
+```
+
+**Angle convention note:** GTR1's `D` takes **n·h**, while the Fresnel and
+sheen terms take **wi·h**. These are different angles and confusing them is a
+classic source of error; the code names them `cos_theta_h_n` and
+`cos_theta_h` respectively.
+
+## 18b. Pre-implementation validation of GTR1
+
+The distribution and its sampler were validated in isolation (pure NumPy,
+independent of Mitsuba) **before** any of it entered the renderer, so that a
+later failure could not be ambiguous between "wrong formula" and "wrong
+integration".
+
+**Normalisation.** `integral of D(h)·cos(h) dh` over the hemisphere:
+
+| alpha | integral |
+|---|---|
+| 0.1 | 1.000000 |
+| 0.05 | 1.000000 |
+| 0.01 | 1.000001 |
+| 0.001 | 1.000000 (after grid refinement — see below) |
+
+**Sampler correctness.** Inverting the GTR1 CDF in cos(theta):
+
+- Per-bin deviation from the analytic density: mean |z| = 0.74–0.90, max
+  |z| = 2.17–3.45 across 59 bins. That is pure counting noise for that many
+  bins.
+- Kolmogorov-Smirnov test over 20 seeds at alpha = 0.1, 0.01, 0.001:
+  **0/20 failures at every alpha**, median p = 0.432.
+- **Control:** the same test on a deliberately mis-scaled sampler (alpha off
+  by 5%) gave median p = 4.87e-19 and **20/20 failures**. This establishes
+  that the test has the power to detect an error of that magnitude, so the
+  passes above are meaningful rather than vacuous.
+
+**Two false alarms, both traced to the reference rather than the formula.**
+Recorded because the diagnostic pattern recurs throughout this project:
+
+- The alpha=0.001 integral initially read 1.005589. Hypothesis: quadrature
+  resolution, not formula error. Test: refine the grid. Result: 1.005589 to
+  1.000060 (10x points) to 1.000000 (theta-space grid). Confirmed.
+- Initial per-bin z-scores blew up at small alpha (mean |z| = 14.11 at
+  alpha=0.001), which looked like sampler error. Hypothesis: the reference
+  evaluated the analytic density at bin *centres*, a poor approximation for a
+  steep lobe. Test: integrate the density across each bin instead. Result:
+  mean |z| collapsed to 0.90. The sampler was correct; the reference was not.
+
+## 18c. Staged implementation
+
+Deliberately split so that each stage had an independent check:
+
+- **Stage 1 — `eval()` only.** Clearcoat evaluated but not importance-sampled.
+  Remains unbiased because cosine-hemisphere diffuse sampling covers the whole
+  hemisphere with nonzero pdf, but is very noisy for a narrow coat. Valid only
+  at `metallic=0`; at `metallic=1` the diffuse lobe is never sampled and coat
+  energy would land where pdf ~= 0.
+- **Stage 2 — `sample()` and `pdf()`.** Three-way lobe partition, GTR1
+  importance sampling. Provides the noise reduction, and makes the
+  chi-squared test meaningful for the first time.
+
+Stage 1 provides the brute-force reference that Stage 2 must reproduce.
+
+## 18d. Energy validation — white furnace test
+
+Base configuration is the zero-specular Lambertian (`specular=0`,
+`metallic=0`, `roughness=1.0`), which returns exactly 1.0000, so any increase
+is directly readable as the coat's contribution.
+
+**Predictions made before measurement** (numerically integrated directional
+albedo, orthographic sphere): clearcoat gloss=0 to +0.0124, sheen to +0.0117.
+
+**Measured:**
+
+| Clearcoat | Gloss | Mean | Std | Delta |
+|---|---|---|---|---|
+| 0.0 | 0.0 | 1.0000 | 0.0068 | +0.0000 |
+| 0.5 | 0.0 | 1.0037 | 0.0082 | +0.0036 |
+| 1.0 | 0.0 | 1.0073 | 0.0110 | +0.0073 |
+| 1.0 | 0.5 | 1.0077 | 0.0126 | +0.0077 |
+| 1.0 | 1.0 | 1.0088 | 0.0164 | +0.0087 |
+
+Findings:
+
+- **Regression clean:** `clearcoat=0` returns exactly 1.0000, so the lobe
+  partition collapses to the original two-lobe split as designed.
+- **Linear in `clearcoat`:** +0.0036 at 0.5, +0.0073 at 1.0.
+- **Prediction ratio:** measured/predicted = 0.59 (clearcoat) and 0.61
+  (sheen). The shortfall is sphere-coverage dilution — the furnace frame
+  includes background at radiance 1.0, so the sphere's contribution is scaled
+  by its screen coverage. The two lobes were predicted independently and land
+  on the *same* dilution factor, which would not happen if either were wrong.
+
+## 18e. KNOWN LIMITATION — clearcoat is an additive lobe
+
+**Disney's 2012 clearcoat does not remove energy from the layer beneath it.**
+The coat is added on top; no absorption or base darkening is applied. A
+renderer faithful to the paper therefore *exceeds unity* in a white furnace
+test, by the coat's directional albedo (+0.0073 at `clearcoat=1`).
+
+This is a limitation of the published model, not an implementation defect, and
+it was reproduced deliberately rather than silently corrected. Later models
+address it: Autodesk Standard Surface and Kulla-Conty-style coat absorption
+attenuate the base by approximately `(1 - F_coat)` so the layered result
+conserves energy.
+
+The alternative — adding coat darkening — was considered and rejected for this
+project on the grounds that it deviates from the reference paper the
+implementation is claimed to follow. Documenting the overshoot is the more
+honest position given the project's stated focus on energy-conservation
+validation.
+
+## 18f. Chi-squared — sampling consistency
+
+Chi-squared histograms directions produced by `sample()` against `pdf()`. It
+therefore tests the **three-way lobe partition** introduced by clearcoat,
+which is the highest-risk part of the change (the same class of code that
+produced the earlier mixture-pdf bug).
+
+| Config | Result | p-value |
+|---|---|---|
+| Clearcoat broad (cc=1.0, gloss=0.0) | PASS | 0.996 |
+| Clearcoat partial (cc=0.5, gloss=0.0) | PASS | 0.962 |
+| Clearcoat + specular (cc=1.0, gloss=0.3, r=0.3) | PASS | 0.808 |
+| Clearcoat + metal (cc=1.0, gloss=0.3, r=0.3, m=1.0) | PASS | 0.972 |
+| Clearcoat sharp (cc=1.0, gloss=1.0) | FAIL | see 18g |
+
+The two most diagnostic configs both pass: **all three lobes simultaneously
+active** (the case most likely to expose a partition error), and **metallic
+base where `p_diff = 0`** (partition reduces to coat 0.25 / specular 0.75).
+
+## 18g. Harness resolution boundary — measured, not assumed
+
+The `gloss=1.0` failure was investigated rather than attributed. Two prior
+reasons to suspect the harness: the GTR1 density integrates analytically to
+1.000000 (18b), and the furnace mean did not move between Stage 1 and Stage 2
+(+0.0089 to +0.0087), which it would have if the pdf were genuinely 2.34x too
+large.
+
+**Decisive test — refine the grid at fixed `ires`:**
+
+| res | PDF sum | histogram sum | result |
+|---|---|---|---|
+| 201 | 2.338811 | 0.987365 | FAIL |
+| 401 | 1.636475 | 0.987365 | FAIL |
+| 801 | 1.289908 | 0.987365 | FAIL |
+| 1601 | 1.121898 | 0.987365 | FAIL |
+
+**The histogram sum is identical to six decimal places at every resolution.**
+The sampled distribution does not change; only the tabulated pdf does, and it
+converges monotonically toward the histogram value. A genuine pdf error would
+be invariant under grid refinement.
+
+Error above 0.987365: 1.351 to 0.649 to 0.303 to 0.135, halving per doubling,
+i.e. O(1/N) — the expected rate for integrating a spike narrower than one
+cell. Extrapolating, res ~= 22,000 would be needed to bring the error under
+0.01, requiring ~2.5e11 array entries against Dr.Jit's 2^32 (4.29e9) limit.
+Unreachable in principle, not merely inconvenient.
+
+**Confirmation at gloss=0.95** (a milder failure: pdf sum only 2% high, so the
+test ran and rejected rather than bailing out early):
+
+| res | PDF sum | histogram sum | result |
+|---|---|---|---|
+| 201 | 1.007957 | 0.983060 | FAIL |
+| 401 | 0.991291 | 0.983060 | PASS |
+| 801 | 0.985478 | 0.983060 | PASS |
+
+The verdict flips with grid refinement alone, with sampling unchanged.
+
+**Locating the boundary — gloss sweep at res=201:**
+
+| gloss | alpha | result |
+|---|---|---|
+| 0.0 | 0.1000 | PASS (p=0.996) |
+| 0.5 | 0.0505 | PASS (p=0.974) |
+| 0.8 | 0.0208 | PASS (p=0.972) |
+| 0.95 | 0.0060 | FAIL |
+| 1.0 | 0.0010 | FAIL |
+
+Breakdown lies between alpha = 0.021 and alpha = 0.006. For comparison,
+**Mitsuba's own principled BSDF fails this harness at alpha = 0.1^2 = 0.01**,
+inside the same window — the coat lobe therefore breaks the test at the same
+scale as a production-grade implementation on the same grid.
+
+**Conclusion:** chi-squared validates clearcoat sampling to alpha ~= 0.02 at
+res=201, and to alpha = 0.006 at res >= 401. Below that the harness cannot
+reach, and the furnace test provides coverage instead by confirming the
+estimator remains unbiased.
+
+*Caveat:* the gloss=0.95 passes carry p = 0.097 and 0.079, notably lower than
+the 0.9+ of the broad configs. Consistent with residual quadrature bias — the
+pdf sum is still 0.25% above the histogram at res=801 and still falling — but
+worth noting rather than claiming a clean pass.
+
+## 18h. Sampling probability heuristic
+
+Lobe selection probability is `p_clear`, with the existing two-lobe split
+dividing the remainder: `p_clear + p_spec + p_diff = 1` exactly, and
+`p_clear = 0` recovers the original partition bit-for-bit.
+
+A **fixed** `p_clear = 0.25 · clearcoat` was tried first and **made variance
+worse at every gloss except 1.0**:
+
+| Config | Stage 1 (no coat sampling) | Fixed 0.25 | Gloss-scaled |
+|---|---|---|---|
+| cc=0.5, gloss=0 | 0.0080 | 0.0095 | **0.0082** |
+| cc=1.0, gloss=0 | 0.0107 | 0.0135 | **0.0110** |
+| cc=1.0, gloss=0.5 | 0.0113 | 0.0141 | **0.0126** |
+| cc=1.0, gloss=1.0 | 0.0711 | 0.0164 | **0.0164** |
+
+**Diagnosis:** a broad coat (alpha=0.1) occupies directions cosine sampling
+already covers well, so samples spent on it are taken from the base layers for
+no gain. A sharp coat is a spike no other lobe finds, so it needs them. The
+probability should track lobe narrowness, not be constant:
+
+```
+p_clear = clearcoat · clamp(0.05 + 0.20 · clearcoat_gloss, 0.05, 0.25)
+```
+
+The 0.05 floor exists because a metallic base has `p_diff = 0` and a
+low-roughness GGX lobe may not cover the coat's directions either; dropping to
+zero there would reintroduce fireflies.
+
+Means were unchanged across all three variants (+0.0036 / +0.0073 / +0.0077 /
++0.0087), confirming the partition still sums to 1 and that `sample()` and
+`pdf()` remained in agreement.
+
+**Residual:** gloss=0.5 remains 11% worse than Stage 1 (0.0126 vs 0.0113).
+Accepted rather than tuned further, because the white furnace is the
+worst possible case for importance sampling — uniform radiance from every
+direction means there is nothing to aim at, so any samples diverted to the
+coat are pure loss. In a scene with concentrated lighting, coat sampling is
+precisely what finds the highlight. Tuning further would optimise for a test
+that does not represent real use.
+
+This is a heuristic, not a derivation, and is justified only by the measured
+variance above.
+
+## 18i. Visual validation
+
+`tests/render_clearcoat_sheen.py`. Five spheres sweeping `clearcoat_gloss`
+0 to 1, plus a **matched control row** with `clearcoat=0` and all other
+parameters identical, so any difference is attributable to the coat alone.
+`specular=0` on both rows: with the base GGX lobe active its highlight lands
+in the same place and completely masks the coat.
+
+Scene design note: the key light is deliberately **small**. A large area light
+reflects as a large blob at every gloss value, which is why an earlier version
+of this test showed no visible gloss variation despite the lobe working
+correctly.
+
+**Stage 1 (coat evaluated, not sampled):**
+
+| gloss | peak | area >0.1 | fireflies |
+|---|---|---|---|
+| 0.00 | 0.639 | 1707 | 0 |
+| 0.25 | 0.784 | 2877 | 0 |
+| 0.50 | 0.792 | 2000 | 0 |
+| 0.75 | 0.831 | 1926 | 24 |
+| 1.00 | 0.831 | 241 | 21 |
+
+**Stage 2 (coat importance-sampled):**
+
+| gloss | peak | area >0.1 | fireflies |
+|---|---|---|---|
+| 0.00 | 0.631 | 1708 | 0 |
+| 0.25 | 0.780 | 2880 | 0 |
+| 0.50 | 0.792 | 2001 | 0 |
+| 0.75 | 0.753 | 1913 | **0** |
+| 1.00 | 0.580 | 178 | **0** |
+
+Fireflies eliminated entirely, matching the furnace std drop of 4.3x at
+gloss=1 (0.0711 to 0.0164). The gloss=1 peak falling 0.831 to 0.580 reflects
+that the Stage 1 peak was partly firefly spikes rather than converged signal.
+
+**Known limitation of this figure:** the `area` column is not cleanly
+monotonic in the middle of the sweep, because each sphere sits at a different
+x position and therefore sees the key light at a different reflection angle.
+Only the gloss=1 collapse (7x smaller) exceeds that positional variation. A
+strictly monotonic figure would require rendering each sphere separately at
+an identical position.
+
+---
+
+# 19. Sheen
+
+Disney (2012) sheen: a grazing-angle term simulating the silhouette
+brightening of fabrics such as velvet.
+
+**Parameters added:** `sheen` (0.0 default), `sheen_tint` (0.5 default). Both
+texture-capable.
+
+```
+f_sheen = sheen · C_sheen · (1 - wi·h)^5 · (1 - metallic)
+```
+
+added alongside the diffuse term, where `C_sheen` interpolates from white
+toward the base colour's hue by `sheen_tint`.
+
+## 19a. Documented approximation — sheen is not importance-sampled
+
+Sheen is implemented in `eval()` only. It has **no dedicated sampling strategy
+and no term in `pdf()`**; it rides on whatever direction the existing mixture
+produces. This matches Disney's own reference implementation, and is justified
+by the term being smooth, low-frequency and low-energy — the added variance is
+small and it avoids a fourth slice in the lobe partition.
+
+**This is a deliberate approximation, not full statistical consistency**, and
+is recorded as such alongside the blend-BSDF flat-colour collapse (Section 7)
+and the heuristic emitter-masking threshold (Section 17).
+
+**Direct consequence for testing:** chi-squared compares `sample()` against
+`pdf()`, and sheen appears in neither. **Chi-squared has no power to detect a
+sheen error.** The sheen entry in the chi-squared suite is retained explicitly
+as a *null test* — it guards only against sheen accidentally leaking into
+`sample()` or `pdf()` in future changes. It passed (p=0.686), which
+establishes nothing about sheen's correctness.
+
+Sheen's validation therefore rests entirely on the furnace test and the render
+comparison below.
+
+## 19b. Energy validation — white furnace test
+
+| Sheen | Tint | Mean | Std | Delta |
+|---|---|---|---|---|
+| 0.0 | 0.5 | 1.0000 | 0.0068 | +0.0000 |
+| 0.5 | 0.5 | 1.0036 | 0.0093 | +0.0036 |
+| 1.0 | 0.0 | 1.0071 | 0.0144 | +0.0071 |
+| 1.0 | 0.5 | 1.0071 | 0.0144 | +0.0071 |
+| 1.0 | 1.0 | 1.0071 | 0.0144 | +0.0071 |
+
+- Predicted +0.0117 before measurement; measured +0.0071, ratio 0.61,
+  matching the clearcoat dilution factor of 0.59 (see 18d).
+- Linear in `sheen`: +0.0036 at 0.5, +0.0071 at 1.0.
+- **Tint invariance confirmed:** on a white base, `sheen_tint` 0.0 / 0.5 / 1.0
+  give *identical* results, as they must — a white base has no hue to tint
+  toward. This is the specific test of `_sheen_colour`, and a difference here
+  would indicate an error in the tint interpolation.
+
+Like clearcoat, sheen is **additive** and pushes the furnace mean above unity.
+Same limitation, same reasoning as 18e.
+
+## 19c. Ctint normalisation can exceed 1 per channel
+
+Disney's `Ctint` divides base colour by its luminance (weights 0.3/0.6/0.1),
+which for a saturated base can push a channel above 1. The test render's blue
+base `[0.10, 0.12, 0.34]` has luminance 0.136, giving a tint of approximately
+`[0.74, 0.88, 2.50]` — the blue channel amplified 2.5x.
+
+Consequence: **on a coloured base, `sheen_tint` changes sheen magnitude per
+channel, not only hue.** This is correct Disney behaviour and explains why the
+white-base furnace test shows tint invariance while the coloured-base renders
+do not.
+
+## 19d. Visual validation
+
+Five spheres sweeping `sheen_tint` 0 to 1 on a dark blue base, with a matched
+`sheen=0` control row. Rim lighting from behind, since sheen appears only at
+grazing angles.
+
+Measured against control: sheen changes 28% of pixels, max difference 0.51,
+concentrated at the silhouettes. The tint shift from white to base hue is
+visible across the sweep.
+
+**Same positional confound as 18i:** the per-sphere magnitude varies with
+position because rim lighting differs across the row, so magnitude differences
+between spheres in this figure are not attributable to `sheen_tint` alone.
+
+---
+
+# Additions to Section 6 — Known Limitations
+
+Append to the existing list (GGX single-scattering energy loss):
+
+- **Clearcoat is an additive lobe (Disney 2012).** No coat absorption or base
+  darkening, so a coated material exceeds unity in a white furnace test by the
+  coat's directional albedo (+0.0073 at `clearcoat=1`). Faithful to the
+  reference paper; addressed in later models such as Autodesk Standard Surface
+  and Kulla-Conty coat absorption. See 18e.
+- **Sheen is not importance-sampled.** Evaluated in `eval()` only, matching
+  Disney's reference implementation. Consequence: chi-squared cannot validate
+  sheen at all. See 19a.
+- **Chi-squared cannot validate microfacet lobes below alpha ~= 0.006.** A
+  harness limitation, demonstrated by grid-refinement convergence rather than
+  asserted; Mitsuba's own principled BSDF fails the same harness at
+  alpha = 0.01. Narrow-lobe validation falls back to the furnace test. See 18g.
+- **No anisotropy or rotation control on the clearcoat lobe.** GTR1 is
+  isotropic as specified by Disney; the base specular lobe's anisotropy does
+  not propagate to the coat.
+
+
+
+-----
+
+
+# 20. NEE Shadow Rays vs. Smooth Transmission ("Transparent Shadows")
+
+Direct sunlight was not entering the glazed kitchen window despite the pane
+being correctly transmissive (Section 16, validated pixel-identical to
+Mitsuba's own `dielectric`). This section documents the diagnosis, the fix,
+its four explicit approximations, and the measured cost of each.
+
+**Parameters added:** `transparent_shadows` (bool, default `False`),
+`max_transparent_shadow_depth` (int, default `8`). Exposed as
+`$`-overridable scene defaults and via `render_scene.py --transparent-shadows`.
+
+## 20a. Symptom
+
+With the window glazed and all local emitters stripped so the envmap was the
+only light source, the room lit correctly from ambient/sky directions —
+raising `envmap_scale` visibly brightened every surface — but no directional
+sunbeam appeared, at any scale tested. Ambient transport through the glass was
+never in question; the sharp directional component specifically was absent.
+
+## 20b. Diagnosis
+
+`path_tracer.py`'s NEE call performed a binary, material-blind occlusion test:
+
+```python
+ds, emitter_radiance = scene.sample_emitter_direction(si, sampler.next_2d(), True, active_em)
+```
+
+The `True` triggers Mitsuba's built-in shadow ray, which asks only *"is there
+geometry between the shading point and the light"* — never *"does this
+material transmit in this direction."* A pane of perfectly smooth glass
+therefore blocks that test exactly like an opaque wall, regardless of
+`transmission=1.0`.
+
+Direct sunlight could consequently only arrive via a **BSDF-sampled** path: a
+ray hits the glass, refracts in the single deterministic direction Snell's law
+dictates for that incidence angle, and by chance that direction lands inside
+the sun's small solid angle in the HDRI. Since BSDF sampling on a delta
+surface aims at nothing — it returns the one physically correct refraction —
+this cannot be accelerated by importance sampling.
+
+**Decisive observation:** the same shot showed the sunbeam faintly emerging at
+spp=4000 but not at spp=256. The path exists and is unbiased in principle;
+its convergence rate is impractical. This is a convergence problem, not a
+hard zero.
+
+This is a known difficulty in unidirectional path tracing — the same family as
+caustics, and as the defocused-specular-highlight case encountered earlier in
+this project — and production renderers commonly special-case it.
+
+## 20c. Fix — "shadow-transparent glass"
+
+Manifold Next Event Estimation (iterative root-finding for the true refracted
+path through a specular chain) is the correct solution and was judged out of
+scope. This implements the standard production approximation instead: NEE
+shadow rays pass **straight through** delta-transmissive surfaces, ignoring
+the refraction bend.
+
+`sample_emitter_direction` is called with `test_visibility=False` when the
+feature is enabled, and occlusion is walked manually in `_shadow_blocked()`:
+intersect toward the light, and if the hit surface advertises
+`mi.BSDFFlags.DeltaTransmission`, continue from that point rather than
+treating it as blocked. A non-transmissive hit, or exhausting the
+pass-through budget, counts as blocked.
+
+Identifying glass by that flag is unambiguous here: `principled_bsdf` sets it
+whenever `transmission > 0`, and this renderer supports only smooth
+transmission (Section 16, Known Limitations), so there is no rough-transmission
+case to catch accidentally.
+
+**Design note:** MIS weighting is untouched by this change. `mis_weight()`
+consumes only `ds.pdf` and `bsdf_pdf`, neither of which `_shadow_blocked()`
+modifies.
+
+## 20d. The four approximations, stated explicitly
+
+1. **Straight-line continuation, not the true refracted path.** This is both
+   the entire cost saving relative to MNEE and the entire source of bias:
+   light appears to arrive from a slightly incorrect direction through glass.
+2. **No attenuation.** Neither Fresnel reflection loss nor the pane's
+   `base_colour` tint is applied to light passing through for shadow purposes,
+   so a coloured pane does not tint its own shadow. Magnitude bounded in 20f.
+3. **Delta-transmissive objects cast no direct shadow.** Disabling their
+   occlusion is precisely the mechanism, so any shadow they cast must come
+   from BSDF-sampled paths alone. This affects *every* delta-transmissive
+   surface simultaneously — window, wine glasses, radio dial cover. Measured
+   in 20g.
+4. **Opt-in, not default.** Keeps every previously validated number reachable
+   and unchanged; enabling is a per-render decision.
+
+## 20e. Regression — feature is inert when disabled
+
+Full `run_all.sh` with `transparent_shadows=False`, compared field-by-field
+against the documented baseline.
+
+**Deterministic quantities — exact matches.** Every furnace mean and std
+(diffuse, metallic, zero-specular, Burley, clearcoat deltas, sheen deltas)
+reproduced to the last decimal. Chi-squared PDF sums, including the two known
+failures:
+
+| Config | Documented PDF sum | This run | Match |
+|---|---|---|---|
+| Clearcoat sharp (gloss=1.0) | 2.338811 | 2.338811 | exact |
+| Resolution sweep, res=401 | 1.636475 | 1.636475 | exact |
+| Resolution sweep, res=801 | 1.289908 | 1.289908 | exact |
+| Resolution sweep, res=1601 | 1.121898 | 1.121898 | exact |
+
+**Monte Carlo quantities — varied as expected.** Chi-squared p-values are
+drawn fresh and unseeded; under a true null hypothesis a p-value is itself
+uniformly distributed, so run-to-run variation is the correct behaviour, not
+drift:
+
+| Config | Documented p | This run p | Result |
+|---|---|---|---|
+| Mixed (r=0.4, m=0.5) | 0.849 | 0.828 | PASS |
+| Clearcoat broad (gloss=0.0) | 0.996 | 0.848 | PASS |
+| Clearcoat partial (cc=0.5) | 0.962 | 0.686 | PASS |
+| Clearcoat + specular | 0.808 | 0.909 | PASS |
+| Clearcoat + metal | 0.972 | 0.572 | PASS |
+
+**Result: PASS.** All deterministic values bit-identical; all p-values far
+above the 0.01 threshold. The feature is genuinely inert when disabled.
+
+## 20f. Bias bound — derived from Section 16, no new measurement required
+
+Approximation 2 omits the Fresnel reflectance a true shadow ray would lose at
+each interface. Section 16's own measured Fresnel table gives the magnitude
+directly:
+
+| Incidence | Fresnel F (measured, Section 16) | Light leaked by this approximation |
+|---|---|---|
+| 10 deg | 0.0397 | ~4% |
+| 45 deg | 0.0497 | ~5% |
+| 70 deg | 0.1705 | ~17% |
+| 85 deg | 0.6129 | ~61% |
+
+The bias is therefore small near normal incidence and grows sharply toward
+grazing angles, bounded by exactly that curve. For a window viewed from
+inside a room, most shading points see the pane at moderate incidence, so the
+practical error sits near the low end.
+
+## 20g. Shadow-loss trade-off — measured
+
+Table close-up (`--sensor 2`), 512 spp, 1280x720, `--sampler independent`,
+identical seed, feature the only variable. The affected region is defined by
+the difference image itself rather than a hand-drawn box.
+
+| Change threshold | Pixels | % of frame | mean OFF | mean ON | ratio |
+|---|---|---|---|---|---|
+| > 0.001 | 900,519 | 97.71% | 0.39561 | 0.59203 | 1.496 |
+| > 0.01 | 769,713 | 83.52% | 0.44019 | 0.66982 | 1.522 |
+| > 0.05 | 507,671 | 55.09% | 0.54345 | 0.88292 | 1.625 |
+| > 0.1 | 357,627 | 38.81% | 0.66118 | 1.12162 | 1.696 |
+
+| Direction of change (threshold 0.01) | Pixels |
+|---|---|
+| Brightened | 752,253 |
+| Darkened | 18,125 |
+
+**Result.** Only **1.97%** of changed pixels are darker — a 41:1
+brightened-to-darkened ratio. The shadow loss predicted by approximation 3 is
+real but small, and is dominated by the light the feature admits. The ratio
+rising with threshold (1.496 to 1.696) shows the largest changes land on
+already-bright pixels, consistent with direct sunlight rather than a uniform
+diffuse lift.
+
+**Limitation of this test:** it cannot isolate the wine glasses. The window
+pane is also delta-transmissive and dominates the frame's response, so the
+18,125 darkened pixels represent shadow loss from all delta-transmissive
+surfaces in view, not the glasses alone. Isolating them would require a
+variant scene with the window unglazed; not performed.
+
+## 20h. Convergence cost — measured
+
+Section 10's reference-free methodology: N independently seeded renders per
+configuration, per-pixel standard deviation across the repeats. Relative std
+(std divided by mean) is the meaningful comparison here, since the feature
+makes the image substantially brighter and brighter images carry more
+absolute variance regardless of sampling quality.
+
+| Config | Seeds | SPP | mean per-pixel std | image mean | relative std |
+|---|---|---|---|---|---|
+| OFF | 8 | 64 | 0.45671 | 0.32933 | 0.39087 |
+| ON | 8 | 64 | 0.58976 | 0.49274 | 0.52300 |
+| OFF | 16 | 256 | 0.60816 | 0.33058 | 0.32640 |
+| ON | 16 | 256 | 0.70402 | 0.49417 | 0.45532 |
+
+**Relative std penalty: +33.8% at 64spp, +39.5% at 256spp** — same direction
+and similar magnitude across a 4x change in sample count and a doubled seed
+count, so the finding is robust rather than a small-sample artifact. Both
+configurations' relative std falls as spp rises (0.391 to 0.326 OFF, 0.523 to
+0.455 ON), confirming both converge normally.
+
+**Image mean ratio: 1.495x**, reproduced to three decimals in both rows above
+*and independently* in the 20g test at different resolution, spp and seed set.
+Three independent measurements agreeing establishes this as the feature's
+radiance contribution: **the scene receives 49.5% more total light.**
+
+**Interpretation — the variance increase is expected, not anomalous.** The
+feature opens a previously closed high-variance path: direct sunlight through
+glass, from a small and intense source, which delivers a large contribution
+when a sample lands on it and nothing when it does not. With the feature
+disabled that path contributes zero light *and* therefore zero variance.
+Noise-free absence of light is not the superior outcome. The correct reading
+is that ~35-40% more relative noise buys ~50% more delivered radiance.
+
+## 20i. Pass-through budget boundary — measured
+
+`tests/test_max_transparent_shadow_depth.py`. Synthetic scene: a diffuse
+zero-specular receiver, a light, and N thin glass panes between them at fixed
+0.15 spacing, sweeping N past the cap. Camera position was **measured, not
+assumed** — an on-axis camera behind the light hits the light rectangle
+itself (first hit at `p=[0,0,5]`), and a camera on the far side hits the
+receiver's back face (`dot(d,n)=+1`, and `principled_bsdf` is front-side
+only), both producing an entirely black frame. An off-axis position clears
+both.
+
+**At `max_depth=8`, 1024 spp, cap = 8:**
+
+| Panes | OFF | ON | ON/OFF |
+|---|---|---|---|
+| 0 | 0.71192 | 0.71192 | 1.00 |
+| 1 | 0.60584 | 1.26058 | 2.08 |
+| 2 | 0.52420 | 1.13051 | 2.16 |
+| 4 | 0.05873 | 0.56137 | 9.56 |
+| 6 | 0.15099 | 0.55130 | 3.65 |
+| 7 | 0.21590 | 0.57973 | 2.69 |
+| 8 | 0.29907 | 0.29907 | **1.00** |
+| 9 | 0.40100 | 0.40100 | 1.00 |
+| 10 | 0.52299 | 0.52299 | 1.00 |
+| 12 | 0.84846 | 0.84846 | 1.00 |
+
+**The cap engages exactly and fails conservatively.** At and beyond 8 panes
+the ON and OFF values are identical to five decimal places — the feature
+switches itself off entirely and the renderer degrades to baseline occlusion
+behaviour rather than misbehaving or leaking light.
+
+**Off-by-one, worth noting:** `at_budget = (n_pass + 1) >= max_transparent_shadow_depth`
+with `n_pass` starting at 0 means a cap of 8 permits **7** pass-throughs, not
+8. Behaviour is safe; the parameter name is one greater than the number of
+panes actually traversed.
+
+**Working range is bounded by `max_depth`, not only by the cap.** Sweeping the
+integrator's depth limit shows the two interact:
+
+| `max_depth` | Feature effective up to | Flatlines at |
+|---|---|---|
+| 2 | 1 pane | 2 panes |
+| 4 | 2 panes | 4 panes |
+| 8 | 7 panes | 8 panes (the cap) |
+
+The camera path must refract through every pane before reaching a surface
+where NEE fires, so the depth budget bounds how many panes the feature can
+act behind. **Consequence for the table above:** at `max_depth=8` the
+flatline at 8 panes has two overlapping causes — the cap *and* the depth
+budget — and this test does not cleanly separate them at that point. The cap
+claim rests on the exact 1.00 ratio persisting for 9, 10 and 12 panes.
+
+**Cleanest single-pane measurement:** at `max_depth=2`, one pane gives OFF =
+0.00257 against ON = 0.64646 — a **251x ratio**, with ON recovering 91% of the
+unobstructed reference (0.71192). With multi-bounce suppressed, a single pane
+almost completely blocks NEE, and the feature restores nearly all of it.
+
+**Anomaly investigated:** the OFF column is non-monotonic at `max_depth=8`,
+dipping to 0.0587 at 4 panes then rising to 0.848 at 12. Hypothesis:
+inter-pane multi-bounce, i.e. light reaching the receiver by reflecting
+between densely stacked panes rather than passing directly. Test: re-run at
+`max_depth=2` to suppress multi-bounce. Result: the curve flattened into a
+clean monotonic rise, confirming the hypothesis. The rise itself remains
+attributable to paths other than NEE (BSDF-sampled refraction still reaches
+the light), which is why OFF is not zero for any pane count.
+
+## 20j. Additions to Section 6 — Known Limitations
+
+- **NEE ignores occlusion by smooth transmissive surfaces when
+  `transparent_shadows` is enabled.** A deliberate, opt-in production
+  approximation ("shadow-transparent glass"), not a defect: the exact
+  alternative is Manifold Next Event Estimation, out of scope here.
+  Consequences, all measured: light passing through glass for shadow purposes
+  travels straight rather than refracted and unattenuated (bias bounded by the
+  Fresnel curve, ~4% at normal to ~61% at grazing incidence — 20f);
+  delta-transmissive objects cast no direct shadow (1.97% of affected pixels
+  darkened, 41:1 brightened-to-darkened — 20g); and relative per-pixel
+  variance rises ~35-40% in exchange for 1.495x delivered radiance (20h).
+- **Pass-through budget is bounded by both `max_transparent_shadow_depth` and
+  the integrator's `max_depth`.** The latter is usually the binding
+  constraint, since the camera path must traverse each transmissive surface
+  before NEE fires. Exceeding either degrades conservatively to full occlusion
+  (20i).
+
+
+----

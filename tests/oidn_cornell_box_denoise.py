@@ -61,4 +61,4 @@ d16 = results[SWEEP_SPP[0]][3]
 match = [s for s in SWEEP_SPP if results[s][2] <= d16]
 print(f"\nDenoised 16 spp (excl. emitter) RMSE = {d16:.5f}")
 print(f"  undenoised needs >= {match[0] if match else '>512'} spp to match "
-      f"-> effective sample multiplier ~{(match[0]/16) if match else '>32'}x")
+      f" effective sample multiplier ~{(match[0]/16) if match else '>32'}x")

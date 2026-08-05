@@ -3,7 +3,7 @@
 Section 1: Path tracer energy-transport validation (control test).
 Uses Mitsuba's built-in `diffuse` BSDF, isolating whether the path
 tracer itself handles energy correctly, independent of custom BSDF.
-Expected: mean -> 1.0, std -> 0 as spp increases, matching Mitsuba's
+Expected: mean - 1.0, std - 0 as spp increases, matching Mitsuba's
 own `path` integrator at every spp.
 """
 import _common  # noqa: F401

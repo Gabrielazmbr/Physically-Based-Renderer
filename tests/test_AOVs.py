@@ -46,7 +46,7 @@ if arr.shape[-1] >= 10:
     # assumes layout: [R,G,B, albedo.R,G,B, normal.X,Y,Z, depth.Y]
     # against the printed shape above; adjust indices here if it doesn't match
     albedo = arr[..., 3:6]
-    normal = arr[..., 6:9] * 0.5 + 0.5  # remap [-1,1] -> [0,1] for display only
+    normal = arr[..., 6:9] * 0.5 + 0.5  # remap [-1,1] to [0,1] for display only
     depth = arr[..., 9]
     depth_norm = depth / max(depth.max(), 1e-6)  # normalize for display only
 

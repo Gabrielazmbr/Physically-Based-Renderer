@@ -246,7 +246,7 @@ that tracks whether the previous bounce was a perfect specular event.
 everywhere except at one (or a finite number of) exact direction. Perfect
 mirrors and glass are delta events: there's no "roughly towards the
 mirror", light either goes in the *one* reflected direction or it
-doesn't. You can't meaningfully sample "towards" a delta event the normal
+doesn't. It can't meaningfully sample "towards" a delta event the normal
 probabilistic way, which is why MIS treats delta events as a special case
 later on (weight = 1, no blending — section 6) rather than running the
 usual power heuristic.

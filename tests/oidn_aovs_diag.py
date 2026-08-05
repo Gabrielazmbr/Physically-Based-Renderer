@@ -53,7 +53,7 @@ synthetic = np.clip(gt + rng.normal(0, 0.15, gt.shape), 0, None).astype(np.float
 den_s = run(synthetic, None, None, label="5. GT + gaussian noise, colour only")
 if den_s is not None:
     r = lambda a, b: float(np.sqrt(np.mean((a - b) ** 2)))
-    print(f"     RMSE vs GT: noisy {r(synthetic, gt):.5f} -> denoised {r(den_s, gt):.5f}")
+    print(f"     RMSE vs GT: noisy {r(synthetic, gt):.5f} - denoised {r(den_s, gt):.5f}")
 
 if den_c is not None:
     mi.util.write_bitmap("outputs/Denoise/diag_colour_only.png", den_c)

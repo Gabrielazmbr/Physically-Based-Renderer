@@ -12,8 +12,23 @@ class PathTracer(mi.SamplingIntegrator):
         self.max_depth = props.get("max_depth", 8) # The maximum number of bounces allowed for a ray.
         self.rr_depth = props.get("rr_depth", 3) # Russian Roulette starts after bounce 3.
         self.with_aovs = props.get("with_aovs", False) # Handles AOVs if asked
+
+        '''
         self.firefly_clamp = props.get("firefly_clamp", 0.0)
         # Caps any single sample contribution to a pixel. 0.0 = disabled (default).
+        '''
+
+        # new
+        self.firefly_clamp = props.get("firefly_clamp", 0.0)
+        # Caps any single sample contribution to a pixel. 0.0 = disabled (default).
+
+        self.transparent_shadows = bool(props.get("transparent_shadows", False))
+        # When True, NEE shadow rays pass STRAIGHT THROUGH delta-transmissive
+        # surfaces instead of being blocked by them. Default False = previous
+        # behaviour exactly. See _shadow_blocked() for the full rationale.
+        self.max_transparent_shadow_depth = int(props.get("max_transparent_shadow_depth", 8))
+        self.hide_from_camera = props.get("hide_from_camera", "")
+        # Cap on pass-throughs per shadow ray; beyond it, treated as blocked.
 
     @dr.syntax
     # Decorator for handling Python loops (while statement) into vectorized kernels.
@@ -61,6 +76,12 @@ class PathTracer(mi.SamplingIntegrator):
         aov_normal = mi.Vector3f(0.0)
         aov_depth = mi.Float(0.0)
 
+        hidden_shapes = []
+        if len(self.hide_from_camera) > 0:
+            ids = {s.strip() for s in self.hide_from_camera.split(',') if s.strip()}
+            hidden_shapes = [s for s in scene.shapes() if s.id() in ids]
+            # DIAGNOSTIC -- confirm this actually found the shapes before trusting
+
         while active:
             # Step 1: Intersect
             si = scene.ray_intersect(ray, active) # Test for an intersection and return detailed information
@@ -87,7 +108,13 @@ class PathTracer(mi.SamplingIntegrator):
                 self.firefly_clamp > 0,
                 dr.minimum(bsdf_hit_contrib, self.firefly_clamp),
                 bsdf_hit_contrib,
-            ) # firefly_clamp caps the per-sample contribution before it's added, when enabled
+            )
+            if len(hidden_shapes) > 0:
+                on_hidden = mi.Bool(False)
+                for shp in hidden_shapes:
+                    on_hidden |= (si.shape == shp)
+                bsdf_hit_contrib = dr.select((depth == 0) & on_hidden,
+                                                mi.Color3f(0.0), bsdf_hit_contrib)
             result += bsdf_hit_contrib
             # On new path: energy lost along the path so far * radiance of emitter (from surface) * MIS weight
 
@@ -111,10 +138,25 @@ class PathTracer(mi.SamplingIntegrator):
 
             active_em = active & (depth < self.max_depth) # Masks rays that are still alive
 
+            '''
             ds, emitter_radiance = scene.sample_emitter_direction(
                 si, sampler.next_2d(), True, active_em
             ) # NEE Sampling: Chooses a direct path (ds) to a light from surface. Stores radiance arriving from light (emitter_radiance).
             active_em &= ds.pdf > 0 # Checks if lights can be reached, if not it disables NEE contribution for the ray
+            '''
+
+            # test_visibility=False when doing our own walk -- otherwise Mitsuba
+            # would zero the radiance on glass before we get a say.
+            ds, emitter_radiance = scene.sample_emitter_direction(
+                si, sampler.next_2d(), not self.transparent_shadows, active_em
+            ) # NEE Sampling: Chooses a direct path (ds) to a light from surface. Stores radiance arriving from light (emitter_radiance).
+            active_em &= ds.pdf > 0 # Checks if lights can be reached, if not it disables NEE contribution for the ray
+
+            if self.transparent_shadows:
+                active_em &= ~self._shadow_blocked(scene, si, ds, active_em)
+
+
+
 
             wo = si.to_local(ds.d) # Transform coordinates from world (light sampling) to local (to then evaluate BSDF locally)
             bsdf_val = bsdf.eval(bsdf_ctx, si, wo, active_em) # Evaluates BSDF , reflection towards camera
@@ -179,6 +221,61 @@ class PathTracer(mi.SamplingIntegrator):
         pdf_a *= pdf_a
         pdf_b *= pdf_b
         return dr.select(pdf_a > 0, pdf_a / (pdf_a + pdf_b), mi.Float(0))
+
+    @dr.syntax
+    def _shadow_blocked(self, scene, si, ds, active):
+        """
+        Manual occlusion test that IGNORES delta-transmissive surfaces.
+
+        WHY THIS EXISTS: Mitsuba's built-in visibility test is binary and
+        material-blind -- a pane of perfectly smooth glass blocks a shadow ray
+        exactly like a wall, regardless of transmission=1.0. So NEE can never
+        deliver direct sunlight into a glazed room: the only route is a BSDF
+        sample that happens to refract into the sun's tiny solid angle by
+        chance. Measured: the sunbeam only emerges at ~4000spp.
+
+        The fix is the standard production one ("shadow-transparent glass"):
+        let the shadow ray continue STRAIGHT through glass, ignoring the
+        refraction bend. Deliberately approximate -- see the integrator's
+        docstring for the four trade-offs this makes.
+
+        Identifying glass: principled_bsdf advertises DeltaTransmission
+        whenever transmission > 0 (set once at construction). Since this
+        renderer only supports SMOOTH transmission, that flag is unambiguous --
+        there is no rough-transmission case to accidentally catch.
+
+        Returns a mask: True where the light is genuinely occluded.
+        """
+        # spawn_ray_to() sets maxt just short of the target, so "no hit"
+        # means the ray reached the light -- no manual distance bookkeeping.
+        ray = si.spawn_ray_to(ds.p)
+        blocked = mi.Bool(False)
+        walking = mi.Bool(active)
+        n_pass = mi.UInt32(0)
+
+        while walking:
+            si_sh = scene.ray_intersect(ray, walking)
+            hit = si_sh.is_valid()
+
+            flags = si_sh.bsdf().flags()
+            transparent = (flags & mi.UInt32(+mi.BSDFFlags.DeltaTransmission)) != 0
+
+            at_budget = (n_pass + 1) >= mi.UInt32(self.max_transparent_shadow_depth)
+
+            # Opaque hit -> genuinely blocked.
+            blocked |= walking & hit & ~transparent
+            # Ran out of pass-throughs -> treat as blocked. Conservative on
+            # purpose: a false shadow is a much safer failure than a light
+            # leak (cf. the bsphere_radius truncation bug).
+            blocked |= walking & hit & transparent & at_budget
+
+            walking &= hit & transparent & ~at_budget
+            ray = si_sh.spawn_ray_to(ds.p)
+            n_pass += 1
+
+        return blocked
+
+
 
     def aov_names(self):
         if not self.with_aovs:
