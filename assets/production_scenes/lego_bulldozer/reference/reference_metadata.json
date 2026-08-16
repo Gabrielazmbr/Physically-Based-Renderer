@@ -1,0 +1,100 @@
+{
+  "generated_at_utc": "2026-08-10T12:56:45.341307+00:00",
+  "blender": {
+    "version": "4.3.0",
+    "build_hash": "2b18cad88b13",
+    "blend_file": "../BLENDER_LEGO_CYCLES.blend"
+  },
+  "scene": {
+    "name": "Scene",
+    "frame": 1,
+    "object_count": 440,
+    "material_count": 9
+  },
+  "cycles": {
+    "engine": "CYCLES",
+    "device": "CPU",
+    "feature_set": "SUPPORTED",
+    "samples": 1024,
+    "adaptive_sampling": false,
+    "denoising": false,
+    "path_guiding": false,
+    "light_tree": false,
+    "sampling_pattern": "TABULATED_SOBOL",
+    "seed": 10,
+    "sample_offset": 0,
+    "max_bounces": 8,
+    "diffuse_bounces": 8,
+    "glossy_bounces": 8,
+    "transmission_bounces": 8,
+    "volume_bounces": 8,
+    "transparent_bounces": 8,
+    "min_light_bounces": 3,
+    "direct_clamp": 0.0,
+    "indirect_clamp": 0.0,
+    "filter_glossy": 0.0,
+    "reflective_caustics": true,
+    "refractive_caustics": true,
+    "film_exposure": 1.0,
+    "pixel_filter": "GAUSSIAN",
+    "filter_width": 0.5
+  },
+  "output": {
+    "resolution_x": 1080,
+    "resolution_y": 1080,
+    "resolution_percentage": 100,
+    "pixel_aspect_x": 1.0,
+    "pixel_aspect_y": 1.0,
+    "file_format": "OPEN_EXR",
+    "color_mode": "RGB",
+    "color_depth": "32",
+    "exr_codec": "NONE",
+    "film_transparent": false,
+    "compositing": false,
+    "sequencer": false,
+    "dither": 0.0
+  },
+  "colour_management": {
+    "display_device": "sRGB",
+    "view_transform": "Standard",
+    "look": "None",
+    "exposure": 0.0,
+    "gamma": 1.0
+  },
+  "camera": {
+    "name": "_unnamed_2",
+    "type": "PERSP",
+    "lens_mm": 50.83042907714844,
+    "sensor_width_mm": 36.0,
+    "matrix_world": [
+      [
+        0.4008186161518097,
+        0.026218682527542114,
+        -0.9157822132110596,
+        -1.2000000476837158
+      ],
+      [
+        -0.9161574244499207,
+        0.011470621451735497,
+        -0.40065446496009827,
+        -1.2000000476837158
+      ],
+      [
+        -4.174582812765948e-08,
+        0.9995903968811035,
+        0.02861808054149151,
+        0.5
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "reference": {
+    "exr_path": "cycles_reference_1024spp.exr",
+    "exr_sha256": "9152a73a43e3ca8128b3bc55cb9fe675f482719e8475a3a1342f97786d9bc41d"
+  }
+}

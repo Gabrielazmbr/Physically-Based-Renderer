@@ -5,5 +5,14 @@ __pycache__/
 *.png
 *.jpg
 *.obj
+*.svg
+*.blend1
 outputs/
 .DS_Store
+
+# Runtime source assets are stored with Git LFS. Generated and externally
+# delivered reference images remain ignored.
+!assets/hdri/*.exr
+!assets/production_scenes/kitchen_scene/models/*.obj
+!assets/production_scenes/kitchen_scene/textures/*.jpg
+!assets/production_scenes/kitchen_scene/textures/*.png

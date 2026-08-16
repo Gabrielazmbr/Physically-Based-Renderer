@@ -59,11 +59,13 @@ def glaze_fake_window_light(root, glaze=True):
 
 
 
-# Swap the window material to real transmission
+# Convert the window-frame/sash material to the scene's Principled model
 def fix_window_material(root):
     """
     Window_0001/Window_0002 (models/Mesh163.obj, Mesh154.obj) reference
-    Swapped to principled_bsdf with transmission=1.0.
+    WindowBSDF, which describes the solid frame/sash rather than the glazing.
+    Keep it opaque (transmission=0.0). The separate rectangle converted by
+    glaze_fake_window_light() is the actual thin transmissive pane.
     """
     for bsdf in root.findall('bsdf'):
         if bsdf.get('id') == 'WindowBSDF':
@@ -75,7 +77,8 @@ def fix_window_material(root):
             ET.SubElement(inner, 'float', {'name': 'metallic', 'value': '0.0'})
             ET.SubElement(inner, 'float', {'name': 'transmission', 'value': '0.0'})
             ET.SubElement(inner, 'float', {'name': 'ior', 'value': '1.5'})
-            log.append('fix_window_material, WindowBSDF to principled_bsdf transmission=1.0')
+            log.append('Window frame/sash: WindowBSDF to opaque principled_bsdf '
+                       '(transmission=0.0)')
             return
     log.append('fix_window_material, WARNING — WindowBSDF not found, nothing changed')
 
@@ -672,16 +675,20 @@ def add_blender_cupboard_lights(root, meshes_dir='meshes'):
                f'Unit strip: 5 fixtures) from Blender export')
 
 def add_blender_new_lights(root):
+    # Blender records area-light Power as total emitted flux in watts.  For a
+    # one-sided Lambertian emitter, Phi = pi * A * L, hence L = P / (pi * A).
+    # The RGB values below apply that conversion channel-wise using each
+    # Blender light's colour and exported emitting area.
     lights = {
         'overhead': dict(shape='disk',
             matrix='0.050000 0.000000 0.000000 -0.106671 0.000000 -0.010342 0.048919 1.454664 0.000000 -0.048919 -0.010342 0.777899 0.000000 0.000000 0.000000 1.000000',
-            radiance=(159.154938, 96.867104, 67.946869)),
+            radiance=(202.642361, 123.335027, 86.512641)),
         'near_lamp': dict(shape='disk',
             matrix='0.050000 0.000000 0.000000 0.138790 0.000000 0.000515 0.049997 1.704261 0.000000 -0.049997 0.000515 -1.558141 0.000000 0.000000 0.000000 1.000000',
-            radiance=(318.309875, 138.880112, 44.100700)),
+            radiance=(405.284720, 176.827651, 56.150755)),
         'offscreen_fill': dict(shape='rectangle',
             matrix='-0.183279 0.277201 -0.373589 1.887320 0.448891 0.000000 -0.220221 1.607956 -0.122091 -0.416125 -0.248866 1.139284 0.000000 0.000000 0.000000 1.000000',
-            radiance=(7.500000, 6.570358, 5.321964)),
+            radiance=(9.549297, 8.365640, 6.776135)),
     }
     for name, spec in lights.items():
         shape = ET.SubElement(root, 'shape', {'type': spec['shape'], 'id': f'light_{name}'})
@@ -723,6 +730,16 @@ def configure_hidden_lights(root, hidden_ids='light_near_lamp,light_overhead'):
     if integrator is not None and get_prop(integrator, 'hide_from_camera') is None:
         integrator.append(ET.fromstring(f'<string name="hide_from_camera" value="{hidden_ids}"/>'))
     log.append(f'Hidden from camera (NEE/indirect still active): {hidden_ids}')
+
+def configure_opaque_shadow_shapes(root, shape_ids='WineGlassesBSDF'):
+    """
+    Excludes named shapes from the transparent_shadows pass-through, so they
+    keep casting a normal contact shadow even though they're glass. Only
+    matters when transparent_shadows is enabled; no-op otherwise.
+    """
+    integrator = root.find('integrator')
+    if integrator is not None and get_prop(integrator, 'opaque_shadow_shapes') is None:
+        integrator.append(ET.fromstring(f'<string name="opaque_shadow_shapes" value="{shape_ids}"/>'))
 
 def set_diffuse_model(root, target_id='MushroomsBSDF', model='burley'):
     """
@@ -776,7 +793,6 @@ if __name__ == '__main__':
     add_missing_skirting_bsdf(root)
     convert_all_materials(root)
     set_all_diffuse_models(root)
-    set_all_diffuse_models(root)
     add_showcase_features(root)
     add_pendant_light(root)
     add_envmap(root)
@@ -790,7 +806,9 @@ if __name__ == '__main__':
     add_blender_cupboard_lights(root)
     add_blender_new_lights(root)
     configure_hidden_lights(root)
+    configure_opaque_shadow_shapes(root)
     use_blender_camera(root)
+
 
 
     ET.indent(root, space='\t')

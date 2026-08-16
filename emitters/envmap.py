@@ -15,11 +15,12 @@ class CustomEnvmap(mi.Emitter):
         self.texture = mi.load_dict({
             "type": "bitmap",
             "filename": props["filename"],
-            "raw": True,
+            "raw": True, # Linear RGB
             "filter_type": "bilinear",
             "wrap_mode": "repeat",
-        })
-        self.scale = props.get("scale", 1.0)
+        }) # Creates Mitsuba bitmap texture. Full-resolution radiance representation.
+
+        self.scale = props.get("scale", 1.0) # Scale factor for the environment map. Brightness multiplier.
         self.importance = props.get("importance", True)  # switch: True=importance, False=uniform
         self.mis_compensation = props.get("mis_compensation", True) # Only affects importance=True.
         # Karlik - mis_compensation subtract mean luminance before building the CDF, clamped at 0, so importance sampling
@@ -35,30 +36,32 @@ class CustomEnvmap(mi.Emitter):
         self.res_x = int(props.get("cdf_res_x", 512))
         self.res_y = int(props.get("cdf_res_y", 256))
         self.cdf_pooling = props.get("cdf_pooling", "max")
-        # "mean" or "max" (default — validated in Section 10b, ~18% noise reduction combined with higher resolution)
+        # "mean" or "max" (default) - ~18% noise reduction combined with higher resolution)
 
         bitmap = mi.Bitmap(props["filename"])
-        img = np.array(bitmap, dtype=np.float32)
+        img = np.array(bitmap, dtype=np.float32) # Load bitmap and convert to NumPy array
+
         H, W = img.shape[0], img.shape[1]
         by, bx = H // self.res_y, W // self.res_x
-        blocks = img[:by*self.res_y, :bx*self.res_x].reshape(
-            self.res_y, by, self.res_x, bx, -1)
+        blocks = img[:by*self.res_y, :bx*self.res_x].reshape(self.res_y, by, self.res_x, bx, -1)
+        # HDR image is divided into blocks for pooling (max or mean)
         if self.cdf_pooling == "max":
             small = blocks.max(axis=(1, 3))
         else:
             small = blocks.mean(axis=(1, 3))
 
-        luminance = 0.2126*small[..., 0] + 0.7152*small[..., 1] + 0.0722*small[..., 2]
+        luminance = 0.2126*small[..., 0] + 0.7152*small[..., 1] + 0.0722*small[..., 2] # reduced RGB values converted to luminance
         theta = (np.arange(self.res_y) + 0.5) / self.res_y * math.pi
         sin_theta = np.sin(theta)[:, None]
-        weighted = luminance * sin_theta
+        # The surface-area element of the sphere contains sin(theta)
+        weighted = luminance * sin_theta # weighted luminance by the surface-area element
 
         if self.mis_compensation:
-            weighted = weighted - weighted.mean()  # global mean of the whole map - standard form of the technique
+            weighted = weighted - weighted.mean()  # subtracts the table’s mean before constructing the distribution
 
         weighted = np.maximum(weighted, 1e-8).astype(np.float32) # same epsilon floor as before, now applied after the optional subtraction
 
-        self.distribution = mi.DiscreteDistribution2D(weighted)
+        self.distribution = mi.DiscreteDistribution2D(weighted) # final table passed to Mitsuba
 
 
     def set_scene(self, scene):
@@ -68,6 +71,10 @@ class CustomEnvmap(mi.Emitter):
         self.bsphere_radius = dr.maximum(dr.norm(bbox.max - bbox.min) * 0.5, self.bsphere_radius)
 
     def _dir_to_uv(self, d):
+        """
+        Transforms a world-space direction into the environment’s local coordinate system.
+        Calculates longitude and latitude.
+        """
         d_local = dr.normalize(mi.Vector3f(self.to_world_inv @ mi.Vector3f(d)))
         u = dr.atan2(d_local.x, -d_local.z) * (1.0 / (2.0 * math.pi))
         u = u - dr.floor(u)
@@ -76,6 +83,9 @@ class CustomEnvmap(mi.Emitter):
         return mi.Point2f(u, v)
 
     def _uv_to_dir(self, u, v):
+        """
+        Transforms a UV coordinate into a world-space direction. Inverse of `_dir_to_uv`.
+        """
         theta = v * math.pi
         phi = u * 2.0 * math.pi
         sin_theta, cos_theta = dr.sin(theta), dr.cos(theta)
@@ -83,29 +93,42 @@ class CustomEnvmap(mi.Emitter):
         return dr.normalize(mi.Vector3f(self.to_world @ d_local))
 
     def _radiance(self, d, active):
+        """
+        Creates a temporary texture interaction containing the UV coordinates corresponding to a direction,
+        and evaluates the texture at that point.
+        """
         si_tex = dr.zeros(mi.SurfaceInteraction3f)
         si_tex.uv = self._dir_to_uv(d)
-        return self.texture.eval(si_tex, active) * self.scale
+        return self.texture.eval(si_tex, active) * self.scale #scale changes the overall brightness
 
     def eval(self, si, active=True):
+        """
+        Evaluates the environment map at a given surface interaction point.
+        Used when a camera or BSDF-sampled ray escapes the scene and sees the environment directly.
+        """
         return self._radiance(dr.normalize(-si.wi), active)
 
     def sample_direction(self, it, sample, active=True):
         if not self.importance:
-            # uniform baseline, unchanged from stage 3
+            # uniform baseline
             d = mi.warp.square_to_uniform_sphere(sample)
             pdf = mi.warp.square_to_uniform_sphere_pdf(d)
         else:
             # luminance importance sampling
-            pos, pdf_pmf, remainder = self.distribution.sample(mi.Point2f(sample), active)
+            pos, pdf_pmf, remainder = self.distribution.sample(mi.Point2f(sample), active) # samples the discrete distribution
             u = (mi.Float(pos.x) + remainder.x) / self.res_x
             v = (mi.Float(pos.y) + remainder.y) / self.res_y
+            # continuous UV coordinates
             d = self._uv_to_dir(u, v)
 
             sin_theta = dr.sin(v * math.pi)
+
+            # Cell probability mass × number of cells = density per unit UV area
+            # UV density ÷ spherical Jacobian = density per unit solid angle
             pdf = pdf_pmf * (self.res_x * self.res_y) / \
                   (2.0 * math.pi**2 * dr.maximum(sin_theta, 1e-4))
 
+        # fills Mitsuba’s standard direction-sample record
         ds = dr.zeros(mi.DirectionSample3f)
         ds.d = d
         ds.pdf = pdf
@@ -117,11 +140,19 @@ class CustomEnvmap(mi.Emitter):
         ds.delta = mi.Bool(False)
         ds.emitter = mi.EmitterPtr(self)
 
-        radiance = self._radiance(d, active)
+        radiance = self._radiance(d, active) # evaluates the texture at the UV coordinate corresponding to the direction
         weight = dr.select(pdf > 0, radiance / dr.maximum(pdf, 1e-8), mi.Color3f(0))
         return ds, weight & active
 
     def pdf_direction(self, it, ds, active=True):
+        """
+        Computes the PDF of the direction sample.
+        Its required when a direction was generated by another technique—principally BSDF
+        sampling—and MIS needs to know how likely the environment sampler would have been
+        to generate it.
+        Normalises the direction/ Converts it back to UV coordinates / Locates the corresponding CDF cell.
+        Queries that cell’s probability mass / Applies the same UV-area and solid-angle conversion used during sampling.
+        """
         d = dr.normalize(ds.d)
         if not self.importance:
             return dr.select(active, mi.warp.square_to_uniform_sphere_pdf(d), 0.0)

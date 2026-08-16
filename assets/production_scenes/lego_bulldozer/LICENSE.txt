@@ -1,0 +1,17 @@
+Asset: Lego 856 Bulldozer
+Creator: Heinzelnisse
+Source: https://www.blendswap.com/blend/11490
+Published: 17 January 2014
+Declared licence: Creative Commons Attribution-NonCommercial (CC-BY-NC)
+
+The model, its derived Blender scene, and exported mesh data retain the above
+attribution and licence. This file records the licence stated on the original
+BlendSwap listing; consult that listing and the applicable Creative Commons
+terms for the complete legal conditions.
+
+The renderer implementation, evaluation scripts, measurements, and newly
+generated comparison images are separate project work and are not assertions
+of ownership over the source model.
+
+LEGO is a trademark of the LEGO Group, which does not sponsor, authorise, or
+endorse this research project.

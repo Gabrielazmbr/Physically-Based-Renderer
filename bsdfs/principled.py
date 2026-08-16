@@ -1,6 +1,14 @@
 import drjit as dr
 import mitsuba as mi
 
+"""
+This class implements a Principled BSDF model.
+It can be seen as a material router with validated results.
+The class inherits from Mitsuba’s BSDF interface.
+eval():   How much light would scatter in this specified direction?
+pdf():    How likely is this BSDF to generate that direction?
+sample(): Generate a direction and return its transport weight.
+"""
 
 class PrincipledBSDF(mi.BSDF):
     def __init__(self, props):
@@ -14,40 +22,40 @@ class PrincipledBSDF(mi.BSDF):
         # Roughness
         self.roughness = props.get("roughness", 0.0) # Gets roughness, if not falls to smooth 0.0
         if not isinstance(self.roughness, mi.Texture):
-            self.roughness = mi.Float(self.roughness) # Mitsuba's parser instantiates intp mi.Texture object
+            self.roughness = mi.Float(self.roughness)
 
         # Metallic
         self.metallic = props.get("metallic", 0.0) # Gets metallic, if not falls to dielectric 0.0
         if not isinstance(self.metallic, mi.Texture):
-            self.metallic = mi.Float(self.metallic) # Mitsuba's parser instantiates intp mi.Texture object
+            self.metallic = mi.Float(self.metallic)
 
         # Specular
         self.specular = props.get("specular", 0.5) # Gets specular, default 0.5 matches Disney/Blender convention
         if not isinstance(self.specular, mi.Texture):
-            self.specular = mi.Float(self.specular) # Mitsuba's parser instantiates intp mi.Texture object
+            self.specular = mi.Float(self.specular)
 
         # Anisotropic
         self.anisotropic = props.get("anisotropic", 0.0) # Gets anisotropic, 0.0 = isotropic
         if not isinstance(self.anisotropic, mi.Texture):
-            self.anisotropic = mi.Float(self.anisotropic) # Mitsuba's parser instantiates intp mi.Texture object
+            self.anisotropic = mi.Float(self.anisotropic)
 
-        # Clearcoat — second specular lobe (GTR1), Disney 2012
+        # Clearcoat - second specular lobe (GTR1)
         self.clearcoat = props.get("clearcoat", 0.0) # 0.0 = no coat (default, unchanged behaviour)
         if not isinstance(self.clearcoat, mi.Texture):
             self.clearcoat = mi.Float(self.clearcoat)
 
-        # Clearcoat gloss — 0 = soft coat (alpha 0.1), 1 = near-mirror coat (alpha 0.001)
+        # Clearcoat gloss - 0 = soft coat (alpha 0.1), 1 = near-mirror coat (alpha 0.001)
         self.clearcoat_gloss = props.get("clearcoat_gloss", 1.0)
         if not isinstance(self.clearcoat_gloss, mi.Texture):
             self.clearcoat_gloss = mi.Float(self.clearcoat_gloss)
 
-        # Sheen — grazing-angle fabric term. Evaluated only, never separately
-        # sampled (Disney's own reference does the same) — documented approximation.
+        # Sheen - grazing-angle fabric term. Evaluated only, never separately
+        # sampled (Disney's own reference). Documented approximation.
         self.sheen = props.get("sheen", 0.0)
         if not isinstance(self.sheen, mi.Texture):
             self.sheen = mi.Float(self.sheen)
 
-        # Sheen tint — 0 = white sheen, 1 = tinted toward base_colour's hue
+        # Sheen tint - 0 = white sheen, 1 = tinted toward base_colour's hue
         self.sheen_tint = props.get("sheen_tint", 0.5)
         if not isinstance(self.sheen_tint, mi.Texture):
             self.sheen_tint = mi.Float(self.sheen_tint)
@@ -71,8 +79,8 @@ class PrincipledBSDF(mi.BSDF):
 
         # Flags: Bitmask describing what the BSDF is able to do.
         self.m_flags = (
-            mi.BSDFFlags.DiffuseReflection
-            | mi.BSDFFlags.GlossyReflection #GGX Specular lobe
+            mi.BSDFFlags.DiffuseReflection  # Diffuse reflection
+            | mi.BSDFFlags.GlossyReflection  # GGX Specular lobe
             | mi.BSDFFlags.FrontSide # just front side
         )
         # Component flags: registers a list of lobes required for plugin
@@ -105,21 +113,39 @@ class PrincipledBSDF(mi.BSDF):
 
 
     def _clearcoat_at(self, si, active=True):
+        """
+        Outputs clearcoat at the current surface point,
+        regardless of whether the clearcoat is a constant value or a texture
+        """
         if isinstance(self.clearcoat, mi.Texture):
             return self.clearcoat.eval_1(si, active)
         return self.clearcoat
 
     def _clearcoat_gloss_at(self, si, active=True):
+        """
+        Outputs clearcoat gloss at the current surface point,
+        regardless of whether the clearcoat gloss is a constant value or a texture
+        """
+
         if isinstance(self.clearcoat_gloss, mi.Texture):
             return self.clearcoat_gloss.eval_1(si, active)
         return self.clearcoat_gloss
 
     def _sheen_at(self, si, active=True):
+        """
+        Outputs sheen at the current surface point,
+        regardless of whether the sheen is a constant value or a texture
+        """
+
         if isinstance(self.sheen, mi.Texture):
             return self.sheen.eval_1(si, active)
         return self.sheen
 
     def _sheen_tint_at(self, si, active=True):
+        """
+        Outputs sheen tint at the current surface point,
+        regardless of whether the sheen tint is a constant value or a texture
+        """
         if isinstance(self.sheen_tint, mi.Texture):
             return self.sheen_tint.eval_1(si, active)
         return self.sheen_tint
@@ -195,10 +221,9 @@ class PrincipledBSDF(mi.BSDF):
         """
         GTR1 (Berry) normal distribution — Disney's clearcoat NDF.
         Hand-written because Mitsuba's MicrofacetDistribution only ships
-        Beckmann and GGX (verified against the plugin docs, not assumed).
-        Both (a2 - 1) and log(a2) are negative for alpha < 1, so D > 0.
-        Verified numerically: integral of D*cos over the hemisphere = 1.000000
-        for alpha in [0.001, 0.1].
+        Beckmann and GGX. Both (a2 - 1) and log(a2) are negative for alpha
+        < 1, so D > 0. Verified numerically: integral of D*cos over the
+        hemisphere = 1.000000 for alpha in [0.001, 0.1].
         NOTE: cos_theta_h here is n.h, NOT wi.h.
         """
         a2 = dr.sqr(alpha)

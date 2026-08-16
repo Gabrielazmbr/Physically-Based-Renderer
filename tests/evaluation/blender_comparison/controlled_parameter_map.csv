@@ -1,0 +1,13 @@
+scene,feature,custom_setting,cycles_setting,comparison_status,limitation
+Materials,base colour,Direct RGB input,Principled Base Color,Matched numerically,Underlying diffuse model remains different
+Materials,roughness,Direct scalar or checker texture,Principled Roughness,Matched numerically,Cycles applies roughness to transmission whereas custom transmission is smooth
+Materials,metallic,Direct scalar,Principled Metallic,Matched numerically,Different multiple-scattering and energy-compensation behaviour may remain
+Materials,specular,Disney value with F0=0.08*specular,Principled IOR Level,Closest exposed control,Cycles implementation is not identical
+Materials,anisotropy,0.0 / 0.5 / 0.9,Principled anisotropic level,Matched numerically,Distribution mapping can differ between implementations
+Materials,clearcoat,Weight plus gloss-to-alpha mapping,Coat Weight plus Coat Roughness sqrt(alpha),Converted,Custom uses additive GTR1 coat and Cycles uses its own layered coat
+Materials,transmission,0.0 / 0.5 / 1.0 plus IOR,Transmission Weight plus IOR,Closest exposed control,Custom branch is smooth-only and has no absorption
+Materials,environment,studio_kontrast_04_1k.exr scale 0.55 rotated 28 degrees,Same HDRI strength and nominal rotation,Closest practical match,Environment coordinate conventions require visual orientation check
+HDR environment,environment,sundowner_overlook_1k.exr scale 1,Same HDRI strength 1 with +90 degree Blender Z mapping correction,Matched input and orientation,Renderer importance-sampling implementations differ
+HDR environment,geometry,Unit metallic sphere and transformed shallow floor strip,Same converted dimensions position and materials,Matched,Filtering and microfacet implementations differ
+Camera/DoF,optics,Horizontal FOV 40 degrees focus 5 aperture radius 0.15 m,36 mm sensor with converted focal length and f-number,Converted physically,F-stop conversion assumes entrance-pupil diameter equals twice aperture radius
+All,output,Linear float32 RGB EXR,Full-float RGB EXR Linear Rec.709,Matched policy,Colour pipeline must remain Standard exposure 0 gamma 1

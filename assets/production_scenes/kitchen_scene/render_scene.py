@@ -35,6 +35,9 @@ parser.add_argument('--resx', type=int, default=None)
 parser.add_argument('--spp', type=int, default=256)
 parser.add_argument('--seed', type=int, default=0,
                      help='RNG seed. Vary across runs for multi-seed variance measurement.')
+parser.add_argument('--passes', type=int, default=1,
+                     help='Independently-seeded passes to accumulate and average. '
+                          '1 = current single-render behaviour.')
 
 parser.add_argument('--out', default='render.png')
 
@@ -100,7 +103,18 @@ if args.aovs:
 
 
 scene = mi.load_file(args.scene, **load_kwargs)
-img = mi.render(scene, spp=args.spp, sensor=args.sensor, seed=args.seed)
+if args.passes <= 1:
+    img = mi.render(scene, spp=args.spp, sensor=args.sensor, seed=args.seed)
+else:
+    import numpy as np
+    accum = None
+    for i in range(args.passes):
+        pass_img = mi.render(scene, spp=args.spp, sensor=args.sensor, seed=args.seed + i)
+        pass_arr = np.array(pass_img, dtype=np.float32)
+        accum = pass_arr if accum is None else accum + pass_arr
+        print(f'  pass {i+1}/{args.passes} done (seed={args.seed + i})')
+    img = mi.TensorXf(np.ascontiguousarray(accum / args.passes))
+    print(f'Accumulated {args.passes} x {args.spp} spp = {args.passes * args.spp} spp total')
 
 out = args.out
 if args.aovs and not out.lower().endswith('.exr'):
