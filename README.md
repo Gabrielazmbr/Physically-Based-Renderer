@@ -6,6 +6,8 @@ This repository accompanies the thesis **“Implementing and Validating Physical
 
 Mitsuba and Dr.Jit provide scene loading, geometry, ray intersection, films, samplers, plugin interfaces, and vectorised execution. The work in this repository implements and evaluates the transport, material, lighting, camera, scene-integration, and post-processing behaviour built on that foundation.
 
+> **Project walkthrough:** [Watch the renderer demonstration on YouTube](https://youtu.be/x9QPDBPHqjg)
+
 ## Contents
 
 - [Thesis context](#thesis-context)
